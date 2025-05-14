@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, String, Text, DateTime, Integer, Enum, ForeignKey
+    Column, String, Text, DateTime, Integer, Enum, ForeignKey, JSON
 )
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -21,3 +21,13 @@ class Message(Base):
     role       = Column(Enum("user", "assistant", name="role_enum"))
     text       = Column(Text)
     ts         = Column(DateTime, default=datetime.utcnow)
+
+class FAQ(Base):
+    __tablename__ = "faqs"
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id   = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
+    question    = Column(Text, nullable=False)
+    answer      = Column(Text, nullable=False)
+    embedding   = Column(JSON, nullable=True)  # Storing embedding as JSON
+    ts          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
