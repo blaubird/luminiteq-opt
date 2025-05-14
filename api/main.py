@@ -9,10 +9,10 @@ from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-# Assuming the directory structure is api/main.py, api/deps.py, api/models.py, api/routers/admin.py
-from .deps import get_db, tenant_by_phone_id # Adjusted to relative import if main is part of a package
-from .models import Message, Tenant # Adjusted to relative import
-from .routers import admin as admin_router # Import the admin router
+# Changed to absolute imports as main.py is the entry point
+from deps import get_db, tenant_by_phone_id 
+from models import Message, Tenant 
+from routers import admin as admin_router 
 
 # --- Environment Variable Sanitization ---
 if os.getenv("OPENAI_API_KEY"):
@@ -27,7 +27,7 @@ if os.getenv("VERIFY_TOKEN"):
 app = FastAPI(
     title="Luminiteq WhatsApp Integration API",
     description="Handles WhatsApp webhooks, processes messages using AI, and provides admin functionalities.",
-    version="1.0.1" # Incremented version
+    version="1.0.3" # Incremented version for syntax fix
 )
 
 # Include the admin router
@@ -186,7 +186,7 @@ async def handle_ai_reply(
             messages=chat_context,
         )
         ai_answer = response.choices[0].message.content.strip()
-        logger.info(f"Background task: AI generated answer: '{ai_answer[:100]}...' for tenant {tenant.id}")
+        logger.info(f"Background task: AI generated answer: '{ai_answer[:100]}...'" ) # Corrected this line
 
         db_ai_message = Message(
             tenant_id=tenant.id,
