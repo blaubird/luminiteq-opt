@@ -1,9 +1,16 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "NIXPACKS",
+    "nixpacksConfig": {
+      "startCommand": "hypercorn main:app --bind 0.0.0.0:$PORT",
+      "installCommand": "pip install --upgrade pip pip-tools && pip-compile requirements.in -o requirements.txt --resolver=backtracking && pip install -r requirements.txt"
+    }
   },
   "deploy": {
-    "startCommand": "hypercorn main:app --bind \"0.0.0.0:$PORT\""
+    "numReplicas": 1,
+    "sleepApplication": false,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }
