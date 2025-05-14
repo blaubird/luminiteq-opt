@@ -1,0 +1,11 @@
+fastapi==0.100.0
+hypercorn==0.14.4
+httpx==0.27.0
+sqlalchemy>=1.4
+openai>=0.27.0
+alembic>=1.9.0
+python-dotenv # For managing environment variables, good practice
+# Consider adding a linter like flake8 or a formatter like black
+# flake8
+# black
+
