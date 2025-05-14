@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.env
+.venv
+venv/
+ENV/
+env/
+
+# Database
+*.sqlite3
+local.db
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Railway
+.railway/
+
+# Logs
+logs/
+*.log
+
+# Other
+*.tar.gz
+*.zip
+
