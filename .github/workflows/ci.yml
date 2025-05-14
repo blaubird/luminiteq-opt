@@ -1,0 +1,60 @@
+name: Python CI
+
+on:
+  push:
+    branches: [ main, develop ] # Запускать при push в main или develop
+    paths:
+      - 'api/**' # Запускать только если изменения в директории api
+  pull_request:
+    branches: [ main, develop ] # Запускать при создании/обновлении PR в main или develop
+    paths:
+      - 'api/**'
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"] # Укажите вашу версию Python
+
+    defaults:
+      run:
+        working-directory: ./api # Указываем, что команды должны выполняться в директории api
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip pip-tools ruff pytest
+        # Компилируем requirements.in в requirements.txt, если requirements.in изменился или requirements.txt отсутствует
+        # Для простоты CI, можно всегда перекомпилировать или добавить проверку на изменения
+        pip-compile requirements.in -o requirements.txt --resolver=backtracking
+        pip install -r requirements.txt
+
+    - name: Lint with Ruff
+      run: |
+        ruff check .  # Проверить код
+        ruff format . --check # Проверить форматирование
+
+    - name: Run Alembic check (Optional - dry run)
+      # Эта команда попытается сгенерировать SQL для миграций, не применяя их.
+      # Полезно для проверки, что миграции консистентны.
+      # Потребует настройки DATABASE_URL как переменной окружения в GitHub Actions Secrets, если БД нужна для генерации.
+      run: |
+        echo "DATABASE_URL=sqlite:///./test_ci.db" > .env # Создаем временный .env для CI
+        alembic check
+      # env:
+      #   DATABASE_URL: ${{ secrets.DATABASE_URL_CI }} # Если используете секреты для URL БД
+
+    # - name: Test with Pytest (Закомментировано, пока нет тестов)
+    #   # Убедитесь, что тесты находятся в директории api/tests/
+    #   run: |
+    #     pytest tests/
+    
