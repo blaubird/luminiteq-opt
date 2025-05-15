@@ -12,3 +12,5 @@ sentence-transformers # For generating embeddings
 # Consider adding for development/linting if not managed elsewhere
 # ruff
 # pytest
+
+psycopg2-binary
