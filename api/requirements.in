@@ -6,11 +6,9 @@ openai
 alembic
 python-dotenv
 psycopg2-binary # For PostgreSQL, as DATABASE_URL indicates future Postgres use
-
-# For RAG with FAISS (local, as per user notes)
-faiss-cpu # Or faiss-gpu if GPU is available and intended
+pgvector # For PostgreSQL vector similarity search
+sentence-transformers # For generating embeddings
 
 # Consider adding for development/linting if not managed elsewhere
 # ruff
 # pytest
-
