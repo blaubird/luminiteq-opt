@@ -1,11 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 import os
+import logging
 
 # Changed to absolute imports assuming admin.py is in routers/ and other modules are at the same level as routers/
 from models import Tenant, FAQ # Specific models imported
 from deps import get_db
 from schemas import admin as admin_schemas
+from ai import generate_embedding # Import for generating embeddings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/admin",
@@ -17,8 +21,10 @@ def verify_admin_token(x_admin_token: str = Header(None)):
     """Dependency to verify the admin token."""
     expected_token = os.getenv("X_ADMIN_TOKEN")
     if not expected_token:
+        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server.")
         raise HTTPException(status_code=500, detail="Admin token not configured on server.")
     if not x_admin_token or x_admin_token != expected_token:
+        logger.warning(f"Failed admin token verification. Provided token: {x_admin_token}")
         raise HTTPException(status_code=403, detail="Invalid or missing X-Admin-Token.")
     return True
 
@@ -35,6 +41,7 @@ async def create_tenant(tenant_data: admin_schemas.TenantCreate, db: Session = D
     db.add(new_tenant)
     db.commit()
     db.refresh(new_tenant)
+    logger.info(f"Tenant created with ID: {new_tenant.id} and phone_id: {new_tenant.phone_id}")
     return new_tenant
 
 @router.get("/tenants/", response_model=list[admin_schemas.TenantResponse], dependencies=[Depends(verify_admin_token)])
@@ -64,6 +71,7 @@ async def update_tenant(tenant_id: str, tenant_update: admin_schemas.TenantUpdat
     
     db.commit()
     db.refresh(db_tenant)
+    logger.info(f"Tenant with ID: {tenant_id} updated.")
     return db_tenant
 
 @router.delete("/tenants/{tenant_id}", status_code=204, dependencies=[Depends(verify_admin_token)])
@@ -73,23 +81,35 @@ async def delete_tenant(tenant_id: str, db: Session = Depends(get_db)):
     if not db_tenant:
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
     
+    # Consider what to do with associated FAQs and Messages: cascade delete or prevent deletion if associations exist.
+    # For now, direct delete.
     db.delete(db_tenant)
     db.commit()
+    logger.info(f"Tenant with ID: {tenant_id} deleted.")
     return
 
 # === FAQ Management ===
 
 @router.post("/tenants/{tenant_id}/faq/", response_model=admin_schemas.FAQResponse, dependencies=[Depends(verify_admin_token)])
 async def create_faq_entry(tenant_id: str, faq_data: admin_schemas.FAQCreate, db: Session = Depends(get_db)):
-    """Create a new FAQ entry for a tenant."""
+    """Create a new FAQ entry for a tenant and generate its embedding."""
     db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not db_tenant:
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
 
-    new_faq = FAQ(**faq_data.model_dump(), tenant_id=tenant_id)
+    content_to_embed = f"Question: {faq_data.question} Answer: {faq_data.answer}"
+    embedding = generate_embedding(content_to_embed)
+    if embedding is None:
+        logger.error(f"Failed to generate embedding for FAQ: Q: {faq_data.question[:50]}... A: {faq_data.answer[:50]}...")
+        # Decide if this should be a hard error or allow creation without embedding
+        # For RAG, embedding is crucial, so raising an error might be appropriate.
+        raise HTTPException(status_code=500, detail="Failed to generate embedding for FAQ content.")
+
+    new_faq = FAQ(**faq_data.model_dump(), tenant_id=tenant_id, embedding=embedding)
     db.add(new_faq)
     db.commit()
     db.refresh(new_faq)
+    logger.info(f"FAQ entry created with ID: {new_faq.id} for tenant: {tenant_id}")
     return new_faq
 
 @router.get("/tenants/{tenant_id}/faq/", response_model=list[admin_schemas.FAQResponse], dependencies=[Depends(verify_admin_token)])
@@ -112,17 +132,34 @@ async def get_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(get_d
 
 @router.put("/tenants/{tenant_id}/faq/{faq_id}", response_model=admin_schemas.FAQResponse, dependencies=[Depends(verify_admin_token)])
 async def update_faq_entry(tenant_id: str, faq_id: int, faq_update: admin_schemas.FAQUpdate, db: Session = Depends(get_db)):
-    """Update an existing FAQ entry."""
+    """Update an existing FAQ entry. If question or answer changes, regenerate embedding."""
     db_faq = db.query(FAQ).filter(FAQ.id == faq_id, FAQ.tenant_id == tenant_id).first()
     if not db_faq:
         raise HTTPException(status_code=404, detail=f"FAQ entry with id {faq_id} for tenant {tenant_id} not found.")
 
     update_data = faq_update.model_dump(exclude_unset=True)
+    needs_re_embedding = False
+    
     for key, value in update_data.items():
+        if key in ["question", "answer"] and getattr(db_faq, key) != value:
+            needs_re_embedding = True
         setattr(db_faq, key, value)
+    
+    if needs_re_embedding or not db_faq.embedding: # Also re-embed if embedding is missing for some reason
+        logger.info(f"Regenerating embedding for FAQ ID: {db_faq.id} due to content change or missing embedding.")
+        content_to_embed = f"Question: {db_faq.question} Answer: {db_faq.answer}"
+        embedding = generate_embedding(content_to_embed)
+        if embedding is None:
+            logger.error(f"Failed to regenerate embedding for FAQ ID: {db_faq.id}")
+            # Again, decide on error handling. For now, we proceed but log the error.
+            # If embedding is critical, this might need to raise an HTTPException.
+            pass # Or raise HTTPException
+        else:
+            db_faq.embedding = embedding
     
     db.commit()
     db.refresh(db_faq)
+    logger.info(f"FAQ entry with ID: {faq_id} for tenant: {tenant_id} updated.")
     return db_faq
 
 @router.delete("/tenants/{tenant_id}/faq/{faq_id}", status_code=204, dependencies=[Depends(verify_admin_token)])
@@ -134,4 +171,5 @@ async def delete_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(ge
     
     db.delete(db_faq)
     db.commit()
+    logger.info(f"FAQ entry with ID: {faq_id} for tenant: {tenant_id} deleted.")
     return
