@@ -199,9 +199,8 @@ async def handle_ai_reply(
             model=os.getenv("OPENAI_MODEL", "gpt-4o"),
             messages=chat_context,
         )
-        ai_answer = response.choices[0].message.content.strip()
-        logger.info(f"Background task: AI generated answer: '{ai_answer[:100]}...'" )       db_ai_message = Message(
-            tenant_id=tenant.id,
+        ai_answer = response.choices[0].message        logger.info(f"Background task: AI generated answer: 	ranslation{\\'{ai_answer[:100]}...\\\'}")
+        db_ai_message = Message(            tenant_id=tenant.id,
             role="assistant",
             text=ai_answer,
         )
