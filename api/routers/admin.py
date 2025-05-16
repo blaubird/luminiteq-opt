@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Log the expected token at module load time for initial check
 EXPECTED_ADMIN_TOKEN_ON_LOAD = os.getenv("X_ADMIN_TOKEN")
-logger.info(f"ADMIN_PY_LOAD: Expected X_ADMIN_TOKEN from env: 	|"{EXPECTED_ADMIN_TOKEN_ON_LOAD}"|")
+logger.info(f"ADMIN_PY_LOAD: Expected X_ADMIN_TOKEN from env: |{EXPECTED_ADMIN_TOKEN_ON_LOAD}|")
 
 router = APIRouter(
     prefix="/admin",
@@ -24,8 +24,8 @@ router = APIRouter(
 def verify_admin_token(x_admin_token: str = Header(None)):
     """Dependency to verify the admin token."""
     expected_token = os.getenv("X_ADMIN_TOKEN")
-    logger.info(f"VERIFY_ADMIN_TOKEN: Expected token from os.getenv: 	|"{expected_token}"|")
-    logger.info(f"VERIFY_ADMIN_TOKEN: Received token from X-Admin-Token header: 	|"{x_admin_token}"|")
+    logger.info(f"VERIFY_ADMIN_TOKEN: Expected token from os.getenv: |{expected_token}|")
+    logger.info(f"VERIFY_ADMIN_TOKEN: Received token from X-Admin-Token header: |{x_admin_token}|")
 
     if not expected_token:
         logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server (os.getenv returned None or empty).")
@@ -37,7 +37,7 @@ def verify_admin_token(x_admin_token: str = Header(None)):
         raise HTTPException(status_code=403, detail="Missing X-Admin-Token header.")
 
     if x_admin_token != expected_token:
-        logger.warning(f"Failed admin token verification. Provided token in header 	|"{x_admin_token}"| does not match expected token from env 	|"{expected_token}"|")
+        logger.warning(f"Failed admin token verification. Provided token in header |{x_admin_token}| does not match expected token from env |{expected_token}|")
         raise HTTPException(status_code=403, detail="Invalid X-Admin-Token.")
     
     logger.info("Admin token verification successful.")
