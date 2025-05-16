@@ -11,6 +11,10 @@ from ai import generate_embedding # Import for generating embeddings
 
 logger = logging.getLogger(__name__)
 
+# Log the expected token at module load time for initial check
+EXPECTED_ADMIN_TOKEN_ON_LOAD = os.getenv("X_ADMIN_TOKEN")
+logger.info(f"ADMIN_PY_LOAD: Expected X_ADMIN_TOKEN from env: 	|"{EXPECTED_ADMIN_TOKEN_ON_LOAD}"|")
+
 router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
@@ -20,12 +24,23 @@ router = APIRouter(
 def verify_admin_token(x_admin_token: str = Header(None)):
     """Dependency to verify the admin token."""
     expected_token = os.getenv("X_ADMIN_TOKEN")
+    logger.info(f"VERIFY_ADMIN_TOKEN: Expected token from os.getenv: 	|"{expected_token}"|")
+    logger.info(f"VERIFY_ADMIN_TOKEN: Received token from X-Admin-Token header: 	|"{x_admin_token}"|")
+
     if not expected_token:
-        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server.")
+        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server (os.getenv returned None or empty).")
+        # Log this specific case before raising HTTP 500
         raise HTTPException(status_code=500, detail="Admin token not configured on server.")
-    if not x_admin_token or x_admin_token != expected_token:
-        logger.warning(f"Failed admin token verification. Provided token: {x_admin_token}")
-        raise HTTPException(status_code=403, detail="Invalid or missing X-Admin-Token.")
+    
+    if not x_admin_token:
+        logger.warning("Failed admin token verification: X-Admin-Token header is missing or empty.")
+        raise HTTPException(status_code=403, detail="Missing X-Admin-Token header.")
+
+    if x_admin_token != expected_token:
+        logger.warning(f"Failed admin token verification. Provided token in header 	|"{x_admin_token}"| does not match expected token from env 	|"{expected_token}"|")
+        raise HTTPException(status_code=403, detail="Invalid X-Admin-Token.")
+    
+    logger.info("Admin token verification successful.")
     return True
 
 # === Tenant Management ===
@@ -81,8 +96,6 @@ async def delete_tenant(tenant_id: str, db: Session = Depends(get_db)):
     if not db_tenant:
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
     
-    # Consider what to do with associated FAQs and Messages: cascade delete or prevent deletion if associations exist.
-    # For now, direct delete.
     db.delete(db_tenant)
     db.commit()
     logger.info(f"Tenant with ID: {tenant_id} deleted.")
@@ -101,8 +114,6 @@ async def create_faq_entry(tenant_id: str, faq_data: admin_schemas.FAQCreate, db
     embedding = generate_embedding(content_to_embed)
     if embedding is None:
         logger.error(f"Failed to generate embedding for FAQ: Q: {faq_data.question[:50]}... A: {faq_data.answer[:50]}...")
-        # Decide if this should be a hard error or allow creation without embedding
-        # For RAG, embedding is crucial, so raising an error might be appropriate.
         raise HTTPException(status_code=500, detail="Failed to generate embedding for FAQ content.")
 
     new_faq = FAQ(**faq_data.model_dump(), tenant_id=tenant_id, embedding=embedding)
@@ -145,15 +156,13 @@ async def update_faq_entry(tenant_id: str, faq_id: int, faq_update: admin_schema
             needs_re_embedding = True
         setattr(db_faq, key, value)
     
-    if needs_re_embedding or not db_faq.embedding: # Also re-embed if embedding is missing for some reason
+    if needs_re_embedding or not db_faq.embedding: 
         logger.info(f"Regenerating embedding for FAQ ID: {db_faq.id} due to content change or missing embedding.")
         content_to_embed = f"Question: {db_faq.question} Answer: {db_faq.answer}"
         embedding = generate_embedding(content_to_embed)
         if embedding is None:
             logger.error(f"Failed to regenerate embedding for FAQ ID: {db_faq.id}")
-            # Again, decide on error handling. For now, we proceed but log the error.
-            # If embedding is critical, this might need to raise an HTTPException.
-            pass # Or raise HTTPException
+            pass 
         else:
             db_faq.embedding = embedding
     
@@ -173,3 +182,4 @@ async def delete_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(ge
     db.commit()
     logger.info(f"FAQ entry with ID: {faq_id} for tenant: {tenant_id} deleted.")
     return
+
