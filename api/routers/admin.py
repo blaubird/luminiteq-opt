@@ -135,4 +135,3 @@ async def delete_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(ge
     db.delete(db_faq)
     db.commit()
     return
-
