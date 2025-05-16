@@ -207,7 +207,7 @@ async def handle_ai_reply(
             messages=chat_context
         )
         ai_answer = response.choices[0].message.content
-        logger.info(f"Background task: AI generated answer: 	ranslation{\\\'{ai_answer[:100]}...\\\\\'}")
+        logger.info(f"Background task: AI generated answer: '{ai_answer[:100]}...'" ) # Corrected f-string
         db_ai_message = Message(
             tenant_id=tenant.id,
             role="assistant",
