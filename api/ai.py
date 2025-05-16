@@ -4,7 +4,7 @@ from sentence_transformers import SentenceTransformer
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from .models import FAQ  # Assuming FAQ model is in models.py
+from models import FAQ  # Assuming FAQ model is in models.py
 
 # Configure logging
 logger = logging.getLogger(__name__)
