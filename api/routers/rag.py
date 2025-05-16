@@ -29,7 +29,7 @@ async def query_rag_system(
     Receives a user query and tenant ID, retrieves relevant context using RAG,
     and returns a generated response.
     """
-    logger.info(f"RAG query received for tenant_id: {request_data.tenant_id}, query: \'{request_data.query}\'")
+    logger.info(f"RAG query received for tenant_id: {request_data.tenant_id}, query: '{request_data.query}'") # Corrected f-string
 
     # 1. Fetch tenant to get system_prompt (or pass it directly if preferred)
     tenant = db.query(Tenant).filter(Tenant.id == request_data.tenant_id).first()
@@ -61,4 +61,4 @@ async def query_rag_system(
     except Exception as e:
         logger.error(f"Unexpected error during RAG processing for tenant {request_data.tenant_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred while processing your request.")
-      
+
