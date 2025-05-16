@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv() # Load environment variables from .env file at the very beginning
+
 import os
 import logging
 from fastapi import FastAPI, Depends, Request, BackgroundTasks, HTTPException, Query, Response
@@ -15,7 +18,8 @@ from models import Message, Tenant
 from routers import admin as admin_router
 from routers import rag as rag_router # Import the RAG router
 
-# --- Environment Variable Sanitization ---
+# --- Environment Variable Sanitization (OpenAI client is now initialized after this) ---
+# This block can remain, or you can rely solely on .env for local and Railway env vars for prod
 if os.getenv("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY").strip()
 if os.getenv("WH_TOKEN"):
@@ -24,6 +28,9 @@ if os.getenv("WH_PHONE_ID"):
     os.environ["WH_PHONE_ID"] = os.getenv("WH_PHONE_ID").strip()
 if os.getenv("VERIFY_TOKEN"):
     os.environ["VERIFY_TOKEN"] = os.getenv("VERIFY_TOKEN").strip()
+
+# Initialize OpenAI client (moved after potential .env load and sanitization)
+ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI(
     title="Luminiteq WhatsApp Integration API",
@@ -34,9 +41,6 @@ app = FastAPI(
 # Include the admin and RAG routers
 app.include_router(admin_router.router)
 app.include_router(rag_router.router) # Add the RAG router
-
-# Initialize OpenAI client
-ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- Logging Configuration ---
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -189,10 +193,13 @@ async def handle_ai_reply(
         db = db_session_factory()
         logger.info(f"Background task: Generating AI reply for tenant {tenant.id} to {sender_phone}")
         
+        # API key should be loaded by now from .env or system environment
         if not os.getenv("OPENAI_API_KEY"):
             logger.error("OPENAI_API_KEY not available in background task.")
             return
 
+        # Re-initialize client here if you want to be absolutely sure it picks up the key
+        # or rely on the global `ai` client initialized after .env load
         local_ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY").strip())
 
         response = await local_ai.chat.completions.create(
@@ -200,7 +207,7 @@ async def handle_ai_reply(
             messages=chat_context
         )
         ai_answer = response.choices[0].message.content
-        logger.info(f"Background task: AI generated answer: '{ai_answer[:100]}...'" )
+        logger.info(f"Background task: AI generated answer: 	ranslation{\\\'{ai_answer[:100]}...\\\\\'}")
         db_ai_message = Message(
             tenant_id=tenant.id,
             role="assistant",
