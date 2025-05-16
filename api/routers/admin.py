@@ -23,21 +23,25 @@ router = APIRouter(
 # --- Admin Token Verification Dependency ---
 def verify_admin_token(x_admin_token: str = Header(None)):
     """Dependency to verify the admin token."""
-    expected_token = os.getenv("X_ADMIN_TOKEN")
-    logger.info(f"VERIFY_ADMIN_TOKEN: Expected token from os.getenv: |{expected_token}|")
-    logger.info(f"VERIFY_ADMIN_TOKEN: Received token from X-Admin-Token header: |{x_admin_token}|")
+    expected_token_from_env = os.getenv("X_ADMIN_TOKEN")
+    
+    # Apply .strip() to both tokens if they are not None
+    expected_token = expected_token_from_env.strip() if expected_token_from_env else None
+    received_token = x_admin_token.strip() if x_admin_token else None
+
+    logger.info(f"VERIFY_ADMIN_TOKEN: Expected token from os.getenv (stripped): |{expected_token}|")
+    logger.info(f"VERIFY_ADMIN_TOKEN: Received token from X-Admin-Token header (stripped): |{received_token}|")
 
     if not expected_token:
-        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server (os.getenv returned None or empty).")
-        # Log this specific case before raising HTTP 500
+        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server (os.getenv returned None or empty, or became empty after strip).")
         raise HTTPException(status_code=500, detail="Admin token not configured on server.")
     
-    if not x_admin_token:
-        logger.warning("Failed admin token verification: X-Admin-Token header is missing or empty.")
+    if not received_token:
+        logger.warning("Failed admin token verification: X-Admin-Token header is missing or empty (or became empty after strip).")
         raise HTTPException(status_code=403, detail="Missing X-Admin-Token header.")
 
-    if x_admin_token != expected_token:
-        logger.warning(f"Failed admin token verification. Provided token in header |{x_admin_token}| does not match expected token from env |{expected_token}|")
+    if received_token != expected_token:
+        logger.warning(f"Failed admin token verification. Stripped header token |{received_token}| does not match stripped env token |{expected_token}|")
         raise HTTPException(status_code=403, detail="Invalid X-Admin-Token.")
     
     logger.info("Admin token verification successful.")
