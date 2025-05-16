@@ -12,7 +12,8 @@ from sqlalchemy.exc import IntegrityError
 # Changed to absolute imports as main.py is the entry point
 from deps import get_db, tenant_by_phone_id 
 from models import Message, Tenant 
-from routers import admin as admin_router 
+from routers import admin as admin_router
+from routers import rag as rag_router # Import the RAG router
 
 # --- Environment Variable Sanitization ---
 if os.getenv("OPENAI_API_KEY"):
@@ -26,12 +27,13 @@ if os.getenv("VERIFY_TOKEN"):
 
 app = FastAPI(
     title="Luminiteq WhatsApp Integration API",
-    description="Handles WhatsApp webhooks, processes messages using AI, and provides admin functionalities.",
-    version="1.0.3" # Incremented version for syntax fix
+    description="Handles WhatsApp webhooks, processes messages using AI, provides admin functionalities, and RAG capabilities.",
+    version="1.1.0" # Incremented version for RAG integration
 )
 
-# Include the admin router
+# Include the admin and RAG routers
 app.include_router(admin_router.router)
+app.include_router(rag_router.router) # Add the RAG router
 
 # Initialize OpenAI client
 ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -51,6 +53,18 @@ def startup_event():
         logger.info("Alembic migrations completed successfully.")
     except Exception as e:
         logger.error(f"Error during Alembic migrations: {e}", exc_info=True)
+    
+    # Explicitly load the embedding model from ai.py if not already loaded
+    # This ensures it's ready when the app starts.
+    try:
+        from ai import load_embedding_model
+        load_embedding_model() # Call the loader function
+        logger.info("Embedding model loading process initiated from main startup.")
+    except ImportError:
+        logger.error("Could not import load_embedding_model from ai.py")
+    except Exception as e:
+        logger.error(f"Error explicitly loading embedding model during startup: {e}", exc_info=True)
+
 
 # --- Health Check Endpoint ---
 @app.get("/health", tags=["Monitoring"], summary="Perform a Health Check")
@@ -186,7 +200,7 @@ async def handle_ai_reply(
             messages=chat_context,
         )
         ai_answer = response.choices[0].message.content.strip()
-        logger.info(f"Background task: AI generated answer: '{ai_answer[:100]}...'" ) # Corrected this line
+        logger.info(f"Background task: AI generated answer: 	ranslation{\'{ai_answer[:100]}...\'} ")
 
         db_ai_message = Message(
             tenant_id=tenant.id,
