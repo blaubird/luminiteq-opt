@@ -6,9 +6,15 @@ from models import Base  # Абсолютный импорт
 # Если не задано, используем sqlite в файл local.db рядом с этим скриптом
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./local.db")
 
+# Настройка аргументов подключения в зависимости от типа базы данных
+connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    # Только для SQLite добавляем check_same_thread=False
+    connect_args["check_same_thread"] = False
+
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},  # для SQLite
+    connect_args=connect_args,
 )
 SessionLocal = sessionmaker(
     autocommit=False, autoflush=False, bind=engine
