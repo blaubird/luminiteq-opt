@@ -11,10 +11,6 @@ from ai import generate_embedding # Import for generating embeddings
 
 logger = logging.getLogger(__name__)
 
-# Log the expected token at module load time for initial check
-EXPECTED_ADMIN_TOKEN_ON_LOAD = os.getenv("X_ADMIN_TOKEN")
-logger.info(f"ADMIN_PY_LOAD: Expected X_ADMIN_TOKEN from env: |{EXPECTED_ADMIN_TOKEN_ON_LOAD}|")
-
 router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
@@ -23,28 +19,20 @@ router = APIRouter(
 # --- Admin Token Verification Dependency ---
 def verify_admin_token(x_admin_token: str = Header(None)):
     """Dependency to verify the admin token."""
-    expected_token_from_env = os.getenv("X_ADMIN_TOKEN")
+    expected_token = os.getenv("X_ADMIN_TOKEN")
     
-    # Apply .strip() to both tokens if they are not None
-    expected_token = expected_token_from_env.strip() if expected_token_from_env else None
-    received_token = x_admin_token.strip() if x_admin_token else None
-
-    logger.info(f"VERIFY_ADMIN_TOKEN: Expected token from os.getenv (stripped): |{expected_token}|")
-    logger.info(f"VERIFY_ADMIN_TOKEN: Received token from X-Admin-Token header (stripped): |{received_token}|")
-
     if not expected_token:
-        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server (os.getenv returned None or empty, or became empty after strip).")
+        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server.")
         raise HTTPException(status_code=500, detail="Admin token not configured on server.")
     
-    if not received_token:
-        logger.warning("Failed admin token verification: X-Admin-Token header is missing or empty (or became empty after strip).")
+    if not x_admin_token:
+        logger.warning("Failed admin token verification: X-Admin-Token header is missing or empty.")
         raise HTTPException(status_code=403, detail="Missing X-Admin-Token header.")
 
-    if received_token != expected_token:
-        logger.warning(f"Failed admin token verification. Stripped header token |{received_token}| does not match stripped env token |{expected_token}|")
+    if x_admin_token != expected_token:
+        logger.warning("Failed admin token verification. Invalid token provided.")
         raise HTTPException(status_code=403, detail="Invalid X-Admin-Token.")
     
-    logger.info("Admin token verification successful.")
     return True
 
 # === Tenant Management ===
@@ -186,4 +174,3 @@ async def delete_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(ge
     db.commit()
     logger.info(f"FAQ entry with ID: {faq_id} for tenant: {tenant_id} deleted.")
     return
-
