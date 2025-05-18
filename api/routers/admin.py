@@ -4,7 +4,7 @@ import os
 import logging
 
 # Changed to absolute imports assuming admin.py is in routers/ and other modules are at the same level as routers/
-from models import Tenant, FAQ # Specific models imported
+from models import Tenant, FAQ, Message # Added Message model import
 from deps import get_db
 from schemas import admin as admin_schemas
 from ai import generate_embedding # Import for generating embeddings
@@ -187,4 +187,70 @@ async def delete_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(ge
     db.delete(db_faq)
     db.commit()
     logger.info(f"FAQ entry with ID: {faq_id} for tenant: {tenant_id} deleted.")
+    return
+
+# === Message Management ===
+
+@router.post("/tenants/{tenant_id}/messages/", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
+async def create_message(tenant_id: str, message_data: admin_schemas.MessageCreate, db: Session = Depends(get_db)):
+    """Create a new message for a tenant."""
+    db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not db_tenant:
+        raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
+    
+    # Override tenant_id from path parameter to ensure consistency
+    message_data_dict = message_data.model_dump()
+    message_data_dict["tenant_id"] = tenant_id
+    
+    new_message = Message(**message_data_dict)
+    db.add(new_message)
+    db.commit()
+    db.refresh(new_message)
+    logger.info(f"Message created with ID: {new_message.id} for tenant: {tenant_id}")
+    return new_message
+
+@router.get("/tenants/{tenant_id}/messages/", response_model=list[admin_schemas.MessageResponse], dependencies=[Depends(verify_admin_token)])
+async def list_messages(tenant_id: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """List all messages for a tenant."""
+    db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not db_tenant:
+        raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
+
+    messages = db.query(Message).filter(Message.tenant_id == tenant_id).order_by(Message.ts.desc()).offset(skip).limit(limit).all()
+    return messages
+
+@router.get("/tenants/{tenant_id}/messages/{message_id}", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
+async def get_message(tenant_id: str, message_id: int, db: Session = Depends(get_db)):
+    """Get a specific message."""
+    message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
+    if not message:
+        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
+    return message
+
+@router.put("/tenants/{tenant_id}/messages/{message_id}", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
+async def update_message(tenant_id: str, message_id: int, message_update: admin_schemas.MessageUpdate, db: Session = Depends(get_db)):
+    """Update an existing message."""
+    db_message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
+    if not db_message:
+        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
+    
+    update_data = message_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_message, key, value)
+    
+    db.commit()
+    db.refresh(db_message)
+    logger.info(f"Message with ID: {message_id} for tenant: {tenant_id} updated.")
+    return db_message
+
+@router.delete("/tenants/{tenant_id}/messages/{message_id}", status_code=204, dependencies=[Depends(verify_admin_token)])
+async def delete_message(tenant_id: str, message_id: int, db: Session = Depends(get_db)):
+    """Delete a message."""
+    db_message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
+    if not db_message:
+        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
+    
+    db.delete(db_message)
+    db.commit()
+    logger.info(f"Message with ID: {message_id} for tenant: {tenant_id} deleted.")
     return
