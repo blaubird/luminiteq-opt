@@ -11,6 +11,10 @@ from ai import generate_embedding # Import for generating embeddings
 
 logger = logging.getLogger(__name__)
 
+# Log the expected token at module load time for initial check
+EXPECTED_ADMIN_TOKEN_ON_LOAD = os.getenv("X_ADMIN_TOKEN")
+logger.info(f"ADMIN_PY_LOAD: Expected X_ADMIN_TOKEN from env: |{EXPECTED_ADMIN_TOKEN_ON_LOAD}|")
+
 router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
@@ -20,9 +24,12 @@ router = APIRouter(
 def verify_admin_token(x_admin_token: str = Header(None)):
     """Dependency to verify the admin token."""
     expected_token = os.getenv("X_ADMIN_TOKEN")
-    
+    logger.info(f"VERIFY_ADMIN_TOKEN: Expected token from os.getenv: |{expected_token}|")
+    logger.info(f"VERIFY_ADMIN_TOKEN: Received token from X-Admin-Token header: |{x_admin_token}|")
+
     if not expected_token:
-        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server.")
+        logger.error("Admin token (X_ADMIN_TOKEN) is not configured on the server (os.getenv returned None or empty).")
+        # Log this specific case before raising HTTP 500
         raise HTTPException(status_code=500, detail="Admin token not configured on server.")
     
     if not x_admin_token:
@@ -30,9 +37,10 @@ def verify_admin_token(x_admin_token: str = Header(None)):
         raise HTTPException(status_code=403, detail="Missing X-Admin-Token header.")
 
     if x_admin_token != expected_token:
-        logger.warning("Failed admin token verification. Invalid token provided.")
+        logger.warning(f"Failed admin token verification. Provided token in header |{x_admin_token}| does not match expected token from env |{expected_token}|")
         raise HTTPException(status_code=403, detail="Invalid X-Admin-Token.")
     
+    logger.info("Admin token verification successful.")
     return True
 
 # === Tenant Management ===
@@ -103,7 +111,7 @@ async def create_faq_entry(tenant_id: str, faq_data: admin_schemas.FAQCreate, db
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
 
     content_to_embed = f"Question: {faq_data.question} Answer: {faq_data.answer}"
-    embedding = generate_embedding(content_to_embed)
+    embedding = await generate_embedding(content_to_embed)  # Добавлен await
     if embedding is None:
         logger.error(f"Failed to generate embedding for FAQ: Q: {faq_data.question[:50]}... A: {faq_data.answer[:50]}...")
         raise HTTPException(status_code=500, detail="Failed to generate embedding for FAQ content.")
@@ -124,6 +132,12 @@ async def list_faq_entries(tenant_id: str, skip: int = 0, limit: int = 100, db: 
 
     faqs = db.query(FAQ).filter(FAQ.tenant_id == tenant_id).offset(skip).limit(limit).all()
     return faqs
+
+# Добавляем алиас для совместимости с запросами, использующими /faqs/ вместо /faq/
+@router.get("/tenants/{tenant_id}/faqs/", response_model=list[admin_schemas.FAQResponse], dependencies=[Depends(verify_admin_token)])
+async def list_faq_entries_alias(tenant_id: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Alias for list_faq_entries to support /faqs/ path."""
+    return await list_faq_entries(tenant_id, skip, limit, db)
 
 @router.get("/tenants/{tenant_id}/faq/{faq_id}", response_model=admin_schemas.FAQResponse, dependencies=[Depends(verify_admin_token)])
 async def get_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(get_db)):
@@ -151,7 +165,7 @@ async def update_faq_entry(tenant_id: str, faq_id: int, faq_update: admin_schema
     if needs_re_embedding or not db_faq.embedding: 
         logger.info(f"Regenerating embedding for FAQ ID: {db_faq.id} due to content change or missing embedding.")
         content_to_embed = f"Question: {db_faq.question} Answer: {db_faq.answer}"
-        embedding = generate_embedding(content_to_embed)
+        embedding = await generate_embedding(content_to_embed)  # Добавлен await
         if embedding is None:
             logger.error(f"Failed to regenerate embedding for FAQ ID: {db_faq.id}")
             pass 
