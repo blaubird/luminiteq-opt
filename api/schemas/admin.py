@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Generic, TypeVar
+from typing import Optional, List, Generic, TypeVar, Dict, Any
 from datetime import datetime
 
 # === Pagination Schemas ===
@@ -14,8 +14,23 @@ class PaginatedResponse(BaseModel, Generic[T]):
     has_next: bool
     has_prev: bool
 
-# === Tenant Schemas ===
+# === Filter Schemas ===
+class TenantFilter(BaseModel):
+    phone_id: Optional[str] = None
+    system_prompt_contains: Optional[str] = None
 
+class FAQFilter(BaseModel):
+    question_contains: Optional[str] = None
+    answer_contains: Optional[str] = None
+    search_text: Optional[str] = None  # For full-text search across question and answer
+
+class MessageFilter(BaseModel):
+    role: Optional[str] = None
+    text_contains: Optional[str] = None
+    from_date: Optional[datetime] = None
+    to_date: Optional[datetime] = None
+
+# === Tenant Schemas ===
 class TenantBase(BaseModel):
     phone_id: str = Field(..., description="WhatsApp Phone Number ID for the tenant")
     wh_token: str = Field(..., description="WhatsApp Permanent Token for the tenant")
@@ -36,7 +51,6 @@ class TenantResponse(TenantBase):
         from_attributes = True # Changed from orm_mode for Pydantic v2
 
 # === FAQ Schemas ===
-
 class FAQBase(BaseModel):
     question: str = Field(..., description="The question part of the FAQ")
     answer: str = Field(..., description="The answer part of the FAQ")
@@ -59,7 +73,6 @@ class FAQResponse(FAQBase):
         from_attributes = True # Changed from orm_mode for Pydantic v2
 
 # === Message Schemas ===
-
 class MessageBase(BaseModel):
     role: str = Field(..., description="Role of the message sender (user or assistant)")
     text: str = Field(..., description="Content of the message")
