@@ -46,3 +46,26 @@ class FAQResponse(FAQBase):
     class Config:
         from_attributes = True # Changed from orm_mode for Pydantic v2
 
+# === Message Schemas ===
+
+class MessageBase(BaseModel):
+    role: str = Field(..., description="Role of the message sender (user or assistant)")
+    text: str = Field(..., description="Content of the message")
+
+class MessageCreate(MessageBase):
+    tenant_id: str = Field(..., description="ID of the tenant this message belongs to")
+    wa_msg_id: Optional[str] = Field(None, description="WhatsApp message ID (for user messages)")
+
+class MessageUpdate(BaseModel):
+    role: Optional[str] = None
+    text: Optional[str] = None
+    wa_msg_id: Optional[str] = None
+
+class MessageResponse(MessageBase):
+    id: int
+    tenant_id: str
+    wa_msg_id: Optional[str] = None
+    ts: datetime
+
+    class Config:
+        from_attributes = True
