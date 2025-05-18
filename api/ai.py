@@ -1,4 +1,4 @@
-# api/ai.py
+# api/ai.py с расширенным логированием
 import logging
 import os
 from openai import AsyncOpenAI
@@ -23,7 +23,10 @@ def load_embedding_model():
                 logger.error("OPENAI_API_KEY environment variable not set")
                 raise ValueError("OPENAI_API_KEY environment variable not set")
             
+            # Добавляем логирование для отладки
             logger.info(f"Initializing OpenAI client for embeddings model: {EMBEDDING_MODEL_NAME}")
+            logger.info(f"OPENAI_API_KEY exists and length is: {len(api_key)} chars")
+            
             client = AsyncOpenAI(api_key=api_key)
             logger.info(f"OpenAI client initialized. Embedding dimension: {EMBEDDING_DIM}")
         except Exception as e:
@@ -51,14 +54,37 @@ async def generate_embedding(text_content: str) -> list[float] | None:
         return None
     
     try:
+        logger.info(f"Generating embedding for text: '{text_content[:50]}...' (length: {len(text_content)})")
+        
+        # Добавляем проверку API ключа перед запросом
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY is missing before embedding request")
+            return None
+        logger.info(f"OPENAI_API_KEY exists before request, length: {len(api_key)} chars")
+        
         response = await client.embeddings.create(
             model=EMBEDDING_MODEL_NAME,
             input=text_content
         )
         embedding = response.data[0].embedding
+        
+        # Логируем успешный результат
+        logger.info(f"Successfully generated embedding with {len(embedding)} dimensions")
         return embedding  # Already a list, no conversion needed
     except Exception as e:
-        logger.error(f"Error during embedding generation for text: '{text_content[:50]}...': {e}", exc_info=True)
+        # Расширенное логирование ошибок
+        logger.error(f"Error during embedding generation: {e}", exc_info=True)
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error details: {str(e)}")
+        
+        # Проверяем наличие API ключа в случае ошибки
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY is missing during error handling")
+        else:
+            logger.error(f"OPENAI_API_KEY exists during error, length: {len(api_key)} chars")
+        
         return None
 
 # --- Database Interaction with pgvector --- #
