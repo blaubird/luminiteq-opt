@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 import os
 import logging
 import math
+from typing import Optional
 
 # Changed to absolute imports assuming admin.py is in routers/ and other modules are at the same level as routers/
 from models import Tenant, FAQ, Message # Added Message model import
@@ -65,18 +66,34 @@ async def create_tenant(tenant_data: admin_schemas.TenantCreate, db: Session = D
 async def list_tenants(
     page: int = Query(1, ge=1, description="Page number, starting from 1"),
     page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    phone_id: Optional[str] = None,
+    system_prompt_contains: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """List all tenants with pagination."""
-    # Calculate total count
-    total = db.query(func.count(Tenant.id)).scalar()
+    """
+    List all tenants with pagination and filtering.
+    
+    - **phone_id**: Filter by exact phone_id match
+    - **system_prompt_contains**: Filter by system_prompt containing this text
+    """
+    # Build query with filters
+    query = db.query(Tenant)
+    
+    # Apply filters if provided
+    if phone_id:
+        query = query.filter(Tenant.phone_id == phone_id)
+    if system_prompt_contains:
+        query = query.filter(Tenant.system_prompt.ilike(f"%{system_prompt_contains}%"))
+    
+    # Calculate total count with filters applied
+    total = query.count()
     
     # Calculate pagination values
-    total_pages = math.ceil(total / page_size)
+    total_pages = math.ceil(total / page_size) if total > 0 else 1
     skip = (page - 1) * page_size
     
     # Get items for current page
-    tenants = db.query(Tenant).offset(skip).limit(page_size).all()
+    tenants = query.offset(skip).limit(page_size).all()
     
     # Create paginated response
     return {
@@ -152,22 +169,48 @@ async def list_faq_entries(
     tenant_id: str, 
     page: int = Query(1, ge=1, description="Page number, starting from 1"),
     page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    question_contains: Optional[str] = None,
+    answer_contains: Optional[str] = None,
+    search_text: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """List all FAQ entries for a tenant with pagination."""
+    """
+    List all FAQ entries for a tenant with pagination and filtering.
+    
+    - **question_contains**: Filter by question containing this text
+    - **answer_contains**: Filter by answer containing this text
+    - **search_text**: Full-text search across both question and answer fields
+    """
     db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not db_tenant:
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
 
-    # Calculate total count
-    total = db.query(func.count(FAQ.id)).filter(FAQ.tenant_id == tenant_id).scalar()
+    # Build query with filters
+    query = db.query(FAQ).filter(FAQ.tenant_id == tenant_id)
+    
+    # Apply filters if provided
+    if question_contains:
+        query = query.filter(FAQ.question.ilike(f"%{question_contains}%"))
+    if answer_contains:
+        query = query.filter(FAQ.answer.ilike(f"%{answer_contains}%"))
+    if search_text:
+        # Full-text search across both question and answer
+        query = query.filter(
+            or_(
+                FAQ.question.ilike(f"%{search_text}%"),
+                FAQ.answer.ilike(f"%{search_text}%")
+            )
+        )
+    
+    # Calculate total count with filters applied
+    total = query.count()
     
     # Calculate pagination values
-    total_pages = math.ceil(total / page_size)
+    total_pages = math.ceil(total / page_size) if total > 0 else 1
     skip = (page - 1) * page_size
     
     # Get items for current page
-    faqs = db.query(FAQ).filter(FAQ.tenant_id == tenant_id).offset(skip).limit(page_size).all()
+    faqs = query.offset(skip).limit(page_size).all()
     
     # Create paginated response
     return {
@@ -186,10 +229,13 @@ async def list_faq_entries_alias(
     tenant_id: str, 
     page: int = Query(1, ge=1, description="Page number, starting from 1"),
     page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    question_contains: Optional[str] = None,
+    answer_contains: Optional[str] = None,
+    search_text: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """Alias for list_faq_entries to support /faqs/ path."""
-    return await list_faq_entries(tenant_id, page, page_size, db)
+    return await list_faq_entries(tenant_id, page, page_size, question_contains, answer_contains, search_text, db)
 
 @router.get("/tenants/{tenant_id}/faq/{faq_id}", response_model=admin_schemas.FAQResponse, dependencies=[Depends(verify_admin_token)])
 async def get_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(get_db)):
@@ -266,22 +312,46 @@ async def list_messages(
     tenant_id: str, 
     page: int = Query(1, ge=1, description="Page number, starting from 1"),
     page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    role: Optional[str] = None,
+    text_contains: Optional[str] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
     db: Session = Depends(get_db)
 ):
-    """List all messages for a tenant with pagination."""
+    """
+    List all messages for a tenant with pagination and filtering.
+    
+    - **role**: Filter by message role (user or assistant)
+    - **text_contains**: Filter by message text containing this string
+    - **from_date**: Filter messages from this date/time (inclusive)
+    - **to_date**: Filter messages until this date/time (inclusive)
+    """
     db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not db_tenant:
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
 
-    # Calculate total count
-    total = db.query(func.count(Message.id)).filter(Message.tenant_id == tenant_id).scalar()
+    # Build query with filters
+    query = db.query(Message).filter(Message.tenant_id == tenant_id)
+    
+    # Apply filters if provided
+    if role:
+        query = query.filter(Message.role == role)
+    if text_contains:
+        query = query.filter(Message.text.ilike(f"%{text_contains}%"))
+    if from_date:
+        query = query.filter(Message.ts >= from_date)
+    if to_date:
+        query = query.filter(Message.ts <= to_date)
+    
+    # Calculate total count with filters applied
+    total = query.count()
     
     # Calculate pagination values
-    total_pages = math.ceil(total / page_size)
+    total_pages = math.ceil(total / page_size) if total > 0 else 1
     skip = (page - 1) * page_size
     
-    # Get items for current page
-    messages = db.query(Message).filter(Message.tenant_id == tenant_id).order_by(Message.ts.desc()).offset(skip).limit(page_size).all()
+    # Get items for current page with default ordering by timestamp descending
+    messages = query.order_by(Message.ts.desc()).offset(skip).limit(page_size).all()
     
     # Create paginated response
     return {
@@ -294,38 +364,6 @@ async def list_messages(
         "has_prev": page > 1
     }
 
-@router.get("/tenants/{tenant_id}/messages/{message_id}", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
-async def get_message(tenant_id: str, message_id: int, db: Session = Depends(get_db)):
-    """Get a specific message."""
-    message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
-    if not message:
-        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
-    return message
-
-@router.put("/tenants/{tenant_id}/messages/{message_id}", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
-async def update_message(tenant_id: str, message_id: int, message_update: admin_schemas.MessageUpdate, db: Session = Depends(get_db)):
-    """Update an existing message."""
-    db_message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
-    if not db_message:
-        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
-    
-    update_data = message_update.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(db_message, key, value)
-    
-    db.commit()
-    db.refresh(db_message)
-    logger.info(f"Message with ID: {message_id} for tenant: {tenant_id} updated.")
-    return db_message
-
-@router.delete("/tenants/{tenant_id}/messages/{message_id}", status_code=204, dependencies=[Depends(verify_admin_token)])
-async def delete_message(tenant_id: str, message_id: int, db: Session = Depends(get_db)):
-    """Delete a message."""
-    db_message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
-    if not db_message:
-        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
-    
-    db.delete(db_message)
-    db.commit()
-    logger.info(f"Message with ID: {message_id} for tenant: {tenant_id} deleted.")
-    return
+@router.get("/tenants/{tenant_id}/messages
+(Content truncated due to size limit. Use line ranges to read in chunks)
+            
