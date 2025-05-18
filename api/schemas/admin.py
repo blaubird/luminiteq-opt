@@ -1,6 +1,18 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Generic, TypeVar
 from datetime import datetime
+
+# === Pagination Schemas ===
+T = TypeVar('T')
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: List[T]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
 
 # === Tenant Schemas ===
 
