@@ -1,15 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 import os
 import logging
 import math
-from typing import Optional
+from typing import Optional, List
 
 # Changed to absolute imports assuming admin.py is in routers/ and other modules are at the same level as routers/
 from models import Tenant, FAQ, Message # Added Message model import
 from deps import get_db
 from schemas import admin as admin_schemas
+from schemas.bulk_import import BulkFAQImportRequest, BulkFAQImportResponse
 from ai import generate_embedding # Import for generating embeddings
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,91 @@ async def create_faq_entry(tenant_id: str, faq_data: admin_schemas.FAQCreate, db
     db.refresh(new_faq)
     logger.info(f"FAQ entry created with ID: {new_faq.id} for tenant: {tenant_id}")
     return new_faq
+
+@router.post("/tenants/{tenant_id}/faq/bulk-import/", response_model=BulkFAQImportResponse, dependencies=[Depends(verify_admin_token)])
+async def bulk_import_faq(
+    tenant_id: str, 
+    import_data: BulkFAQImportRequest, 
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Bulk import multiple FAQ entries for a tenant.
+    
+    This endpoint processes the import in the background to avoid timeouts with large datasets.
+    """
+    # Verify tenant exists
+    db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not db_tenant:
+        raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
+    
+    # Start background task for processing
+    background_tasks.add_task(
+        process_bulk_faq_import,
+        tenant_id=tenant_id,
+        import_items=import_data.items,
+        db_session_factory=lambda: next(get_db())
+    )
+    
+    # Return immediate response
+    return {
+        "total_items": len(import_data.items),
+        "successful_items": 0,  # Will be processed in background
+        "failed_items": 0,      # Will be processed in background
+        "errors": None          # Will be logged during processing
+    }
+
+async def process_bulk_faq_import(tenant_id: str, import_items: List, db_session_factory):
+    """Background task to process bulk FAQ import."""
+    db = None
+    try:
+        db = db_session_factory()
+        successful_count = 0
+        failed_count = 0
+        errors = []
+        
+        for item in import_items:
+            try:
+                # Generate embedding for the FAQ
+                content_to_embed = f"Question: {item.question} Answer: {item.answer}"
+                embedding = await generate_embedding(content_to_embed)
+                
+                if embedding is None:
+                    logger.error(f"Failed to generate embedding for FAQ: Q: {item.question[:50]}...")
+                    failed_count += 1
+                    errors.append({
+                        "question": item.question[:50] + "...",
+                        "error": "Failed to generate embedding"
+                    })
+                    continue
+                
+                # Create new FAQ entry
+                new_faq = FAQ(
+                    question=item.question,
+                    answer=item.answer,
+                    tenant_id=tenant_id,
+                    embedding=embedding
+                )
+                db.add(new_faq)
+                db.commit()
+                successful_count += 1
+                
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Error importing FAQ: {str(e)}")
+                failed_count += 1
+                errors.append({
+                    "question": item.question[:50] + "...",
+                    "error": str(e)
+                })
+        
+        logger.info(f"Bulk import completed for tenant {tenant_id}: {successful_count} successful, {failed_count} failed")
+        
+    except Exception as e:
+        logger.error(f"Error in bulk import background task: {str(e)}")
+    finally:
+        if db:
+            db.close()
 
 @router.get("/tenants/{tenant_id}/faq/", response_model=admin_schemas.PaginatedResponse[admin_schemas.FAQResponse], dependencies=[Depends(verify_admin_token)])
 async def list_faq_entries(
@@ -364,6 +450,38 @@ async def list_messages(
         "has_prev": page > 1
     }
 
-@router.get("/tenants/{tenant_id}/messages
-(Content truncated due to size limit. Use line ranges to read in chunks)
-            
+@router.get("/tenants/{tenant_id}/messages/{message_id}", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
+async def get_message(tenant_id: str, message_id: int, db: Session = Depends(get_db)):
+    """Get a specific message."""
+    message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
+    if not message:
+        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
+    return message
+
+@router.put("/tenants/{tenant_id}/messages/{message_id}", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
+async def update_message(tenant_id: str, message_id: int, message_update: admin_schemas.MessageUpdate, db: Session = Depends(get_db)):
+    """Update an existing message."""
+    db_message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
+    if not db_message:
+        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
+    
+    update_data = message_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_message, key, value)
+    
+    db.commit()
+    db.refresh(db_message)
+    logger.info(f"Message with ID: {message_id} for tenant: {tenant_id} updated.")
+    return db_message
+
+@router.delete("/tenants/{tenant_id}/messages/{message_id}", status_code=204, dependencies=[Depends(verify_admin_token)])
+async def delete_message(tenant_id: str, message_id: int, db: Session = Depends(get_db)):
+    """Delete a message."""
+    db_message = db.query(Message).filter(Message.id == message_id, Message.tenant_id == tenant_id).first()
+    if not db_message:
+        raise HTTPException(status_code=404, detail=f"Message with id {message_id} for tenant {tenant_id} not found.")
+    
+    db.delete(db_message)
+    db.commit()
+    logger.info(f"Message with ID: {message_id} for tenant: {tenant_id} deleted.")
+    return
