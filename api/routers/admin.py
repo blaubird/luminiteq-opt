@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 import os
 import logging
+import math
 
 # Changed to absolute imports assuming admin.py is in routers/ and other modules are at the same level as routers/
 from models import Tenant, FAQ, Message # Added Message model import
@@ -59,11 +61,33 @@ async def create_tenant(tenant_data: admin_schemas.TenantCreate, db: Session = D
     logger.info(f"Tenant created with ID: {new_tenant.id} and phone_id: {new_tenant.phone_id}")
     return new_tenant
 
-@router.get("/tenants/", response_model=list[admin_schemas.TenantResponse], dependencies=[Depends(verify_admin_token)])
-async def list_tenants(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """List all tenants."""
-    tenants = db.query(Tenant).offset(skip).limit(limit).all()
-    return tenants
+@router.get("/tenants/", response_model=admin_schemas.PaginatedResponse[admin_schemas.TenantResponse], dependencies=[Depends(verify_admin_token)])
+async def list_tenants(
+    page: int = Query(1, ge=1, description="Page number, starting from 1"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    db: Session = Depends(get_db)
+):
+    """List all tenants with pagination."""
+    # Calculate total count
+    total = db.query(func.count(Tenant.id)).scalar()
+    
+    # Calculate pagination values
+    total_pages = math.ceil(total / page_size)
+    skip = (page - 1) * page_size
+    
+    # Get items for current page
+    tenants = db.query(Tenant).offset(skip).limit(page_size).all()
+    
+    # Create paginated response
+    return {
+        "items": tenants,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1
+    }
 
 @router.get("/tenants/{tenant_id}", response_model=admin_schemas.TenantResponse, dependencies=[Depends(verify_admin_token)])
 async def get_tenant(tenant_id: str, db: Session = Depends(get_db)):
@@ -123,21 +147,49 @@ async def create_faq_entry(tenant_id: str, faq_data: admin_schemas.FAQCreate, db
     logger.info(f"FAQ entry created with ID: {new_faq.id} for tenant: {tenant_id}")
     return new_faq
 
-@router.get("/tenants/{tenant_id}/faq/", response_model=list[admin_schemas.FAQResponse], dependencies=[Depends(verify_admin_token)])
-async def list_faq_entries(tenant_id: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """List all FAQ entries for a tenant."""
+@router.get("/tenants/{tenant_id}/faq/", response_model=admin_schemas.PaginatedResponse[admin_schemas.FAQResponse], dependencies=[Depends(verify_admin_token)])
+async def list_faq_entries(
+    tenant_id: str, 
+    page: int = Query(1, ge=1, description="Page number, starting from 1"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    db: Session = Depends(get_db)
+):
+    """List all FAQ entries for a tenant with pagination."""
     db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not db_tenant:
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
 
-    faqs = db.query(FAQ).filter(FAQ.tenant_id == tenant_id).offset(skip).limit(limit).all()
-    return faqs
+    # Calculate total count
+    total = db.query(func.count(FAQ.id)).filter(FAQ.tenant_id == tenant_id).scalar()
+    
+    # Calculate pagination values
+    total_pages = math.ceil(total / page_size)
+    skip = (page - 1) * page_size
+    
+    # Get items for current page
+    faqs = db.query(FAQ).filter(FAQ.tenant_id == tenant_id).offset(skip).limit(page_size).all()
+    
+    # Create paginated response
+    return {
+        "items": faqs,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1
+    }
 
 # Добавляем алиас для совместимости с запросами, использующими /faqs/ вместо /faq/
-@router.get("/tenants/{tenant_id}/faqs/", response_model=list[admin_schemas.FAQResponse], dependencies=[Depends(verify_admin_token)])
-async def list_faq_entries_alias(tenant_id: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@router.get("/tenants/{tenant_id}/faqs/", response_model=admin_schemas.PaginatedResponse[admin_schemas.FAQResponse], dependencies=[Depends(verify_admin_token)])
+async def list_faq_entries_alias(
+    tenant_id: str, 
+    page: int = Query(1, ge=1, description="Page number, starting from 1"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    db: Session = Depends(get_db)
+):
     """Alias for list_faq_entries to support /faqs/ path."""
-    return await list_faq_entries(tenant_id, skip, limit, db)
+    return await list_faq_entries(tenant_id, page, page_size, db)
 
 @router.get("/tenants/{tenant_id}/faq/{faq_id}", response_model=admin_schemas.FAQResponse, dependencies=[Depends(verify_admin_token)])
 async def get_faq_entry(tenant_id: str, faq_id: int, db: Session = Depends(get_db)):
@@ -209,15 +261,38 @@ async def create_message(tenant_id: str, message_data: admin_schemas.MessageCrea
     logger.info(f"Message created with ID: {new_message.id} for tenant: {tenant_id}")
     return new_message
 
-@router.get("/tenants/{tenant_id}/messages/", response_model=list[admin_schemas.MessageResponse], dependencies=[Depends(verify_admin_token)])
-async def list_messages(tenant_id: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """List all messages for a tenant."""
+@router.get("/tenants/{tenant_id}/messages/", response_model=admin_schemas.PaginatedResponse[admin_schemas.MessageResponse], dependencies=[Depends(verify_admin_token)])
+async def list_messages(
+    tenant_id: str, 
+    page: int = Query(1, ge=1, description="Page number, starting from 1"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of items per page"),
+    db: Session = Depends(get_db)
+):
+    """List all messages for a tenant with pagination."""
     db_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not db_tenant:
         raise HTTPException(status_code=404, detail=f"Tenant with id {tenant_id} not found.")
 
-    messages = db.query(Message).filter(Message.tenant_id == tenant_id).order_by(Message.ts.desc()).offset(skip).limit(limit).all()
-    return messages
+    # Calculate total count
+    total = db.query(func.count(Message.id)).filter(Message.tenant_id == tenant_id).scalar()
+    
+    # Calculate pagination values
+    total_pages = math.ceil(total / page_size)
+    skip = (page - 1) * page_size
+    
+    # Get items for current page
+    messages = db.query(Message).filter(Message.tenant_id == tenant_id).order_by(Message.ts.desc()).offset(skip).limit(page_size).all()
+    
+    # Create paginated response
+    return {
+        "items": messages,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1
+    }
 
 @router.get("/tenants/{tenant_id}/messages/{message_id}", response_model=admin_schemas.MessageResponse, dependencies=[Depends(verify_admin_token)])
 async def get_message(tenant_id: str, message_id: int, db: Session = Depends(get_db)):
