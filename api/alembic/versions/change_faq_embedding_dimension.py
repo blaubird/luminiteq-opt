@@ -55,3 +55,4 @@ def downgrade():
     op.create_primary_key('faqs_pkey', 'faqs', ['id'])
     op.create_index('idx_faqs_tenant_id', 'faqs', ['tenant_id'])
     op.create_index('idx_faqs_embedding', 'faqs', ['embedding'], postgresql_using='ivfflat')
+
