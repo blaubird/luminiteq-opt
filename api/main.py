@@ -3,7 +3,7 @@ load_dotenv() # Load environment variables from .env file at the very beginning
 
 import os
 import logging
-from fastapi import FastAPI, Depends, Request, BackgroundTasks, HTTPException, Query, Response
+from fastapi import FastAPI, Depends, Request, HTTPException, Query, Response
 from logging.config import fileConfig
 from alembic.config import Config
 from alembic import command
@@ -17,6 +17,7 @@ from deps import get_db, tenant_by_phone_id
 from models import Message, Tenant 
 from routers import admin as admin_router
 from routers import rag as rag_router # Import the RAG router
+from tasks import celery_app, process_ai_reply  # Import Celery app and tasks
 
 # --- Environment Variable Sanitization (OpenAI client is now initialized after this) ---
 # This block can remain, or you can rely solely on .env for local and Railway env vars for prod
@@ -35,7 +36,7 @@ ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 app = FastAPI(
     title="Luminiteq WhatsApp Integration API",
     description="Handles WhatsApp webhooks, processes messages using AI, provides admin functionalities, and RAG capabilities.",
-    version="1.1.0" # Incremented version for RAG integration
+    version="1.2.0" # Incremented version for Celery integration
 )
 
 # Include the admin and RAG routers
@@ -98,7 +99,6 @@ async def verify_webhook(
 @app.post("/webhook", tags=["Webhook"], summary="Receive WhatsApp Messages")
 async def webhook_handler(
     request: Request,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     try:
@@ -170,80 +170,16 @@ async def webhook_handler(
                     {"role": "system", "content": tenant.system_prompt}
                 ] + [{"role": m.role, "content": m.text} for m in history_messages]
 
-                background_tasks.add_task(
-                    handle_ai_reply,
-                    tenant=tenant,
+                # Заменяем BackgroundTasks на Celery
+                process_ai_reply.delay(
+                    tenant_id=tenant.id,
+                    tenant_phone_id=tenant.phone_id,
+                    tenant_wh_token=tenant.wh_token,
+                    tenant_system_prompt=tenant.system_prompt,
                     chat_context=chat_for_ai,
                     sender_phone=sender_phone,
-                    db_session_factory=lambda: next(get_db())
+                    message_id=db_message.id
                 )
-                logger.info(f"Added AI reply task to background for WA message ID: {whatsapp_msg_id}")
+                logger.info(f"Added AI reply task to Celery queue for WA message ID: {whatsapp_msg_id}")
 
     return {"status": "received", "message": "Webhook processed successfully."}
-
-# --- Background Task for AI Reply Processing ---
-async def handle_ai_reply(
-    tenant: Tenant,
-    chat_context: list[dict],
-    sender_phone: str,
-    db_session_factory
-):
-    db = None
-    try:
-        db = db_session_factory()
-        logger.info(f"Background task: Generating AI reply for tenant {tenant.id} to {sender_phone}")
-        
-        # API key should be loaded by now from .env or system environment
-        if not os.getenv("OPENAI_API_KEY"):
-            logger.error("OPENAI_API_KEY not available in background task.")
-            return
-
-        # Re-initialize client here if you want to be absolutely sure it picks up the key
-        # or rely on the global `ai` client initialized after .env load
-        local_ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY").strip())
-
-        response = await local_ai.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            messages=chat_context
-        )
-        ai_answer = response.choices[0].message.content
-        logger.info(f"Background task: AI generated answer: '{ai_answer[:100]}...'" ) # Corrected f-string
-        db_ai_message = Message(
-            tenant_id=tenant.id,
-            role="assistant",
-            text=ai_answer
-        )
-        db.add(db_ai_message)
-        db.commit()
-        logger.info(f"Background task: Saved AI response for tenant {tenant.id}")
-
-        wh_token = tenant.wh_token.strip()
-        if not wh_token:
-            logger.error(f"WhatsApp token not available for tenant {tenant.id} in background task.")
-            return
-
-        async with httpx.AsyncClient() as client:
-            send_url = f"https://graph.facebook.com/v{os.getenv('FB_GRAPH_VERSION', '19.0')}/{tenant.phone_id}/messages"
-            headers = {
-                "Authorization": f"Bearer {wh_token}",
-                "Content-Type": "application/json",
-            }
-            json_payload = {
-                "messaging_product": "whatsapp",
-                "to": sender_phone,
-                "type": "text",
-                "text": {"body": ai_answer},
-            }
-            
-            send_response = await client.post(send_url, headers=headers, json=json_payload)
-            logger.info(f"Background task: WhatsApp API response status {send_response.status_code} for tenant {tenant.id}. Response: {send_response.text}")
-            send_response.raise_for_status()
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Background task: HTTP error sending WhatsApp reply for tenant {tenant.id}: {e.response.text}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Background task: Error processing AI reply for tenant {tenant.id}: {e}", exc_info=True)
-    finally:
-        if db:
-            db.close()
-
