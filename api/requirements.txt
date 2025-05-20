@@ -18,6 +18,8 @@ certifi==2025.4.26
     #   httpcore
     #   httpx
     #   requests
+celery>=5.3.0
+redis>=4.5.0
 charset-normalizer==3.4.2
     # via requests
 distro==1.9.0
