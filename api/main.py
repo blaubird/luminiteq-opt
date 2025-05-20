@@ -45,7 +45,6 @@ app = FastAPI(
 # Setup structured logging
 logger = setup_logging(app)("main")
 
-from logging_utils import RequestLoggerMiddleware
 app.add_middleware(RequestLoggerMiddleware)
 
 # Setup monitoring
