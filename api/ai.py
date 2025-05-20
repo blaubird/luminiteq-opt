@@ -1,13 +1,14 @@
-# api/ai.py с расширенным логированием
-import logging
+# api/ai.py с структурированным логированием
 import os
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
+from monitoring_utils import track_openai_call
+from logging_utils import get_logger
 
 from models import FAQ  # Assuming FAQ model is in models.py
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# Инициализируем структурированный логгер
+logger = get_logger(__name__)
 
 # --- Configuration --- #
 EMBEDDING_MODEL_NAME = "text-embedding-ada-002"  # OpenAI model with 1536 dimensions
@@ -23,20 +24,23 @@ def load_embedding_model():
                 logger.error("OPENAI_API_KEY environment variable not set")
                 raise ValueError("OPENAI_API_KEY environment variable not set")
             
-            # Добавляем логирование для отладки
-            logger.info(f"Initializing OpenAI client for embeddings model: {EMBEDDING_MODEL_NAME}")
-            logger.info(f"OPENAI_API_KEY exists and length is: {len(api_key)} chars")
+            # Структурированное логирование с контекстом
+            logger.info("Initializing OpenAI client for embeddings model", extra={
+                "model": EMBEDDING_MODEL_NAME,
+                "api_key_length": len(api_key)
+            })
             
             client = AsyncOpenAI(api_key=api_key)
-            logger.info(f"OpenAI client initialized. Embedding dimension: {EMBEDDING_DIM}")
+            logger.info("OpenAI client initialized", extra={"embedding_dimension": EMBEDDING_DIM})
         except Exception as e:
-            logger.error(f"Error initializing OpenAI client: {e}", exc_info=True)
+            logger.error("Error initializing OpenAI client", exc_info=e)
             client = None
 
 # Load the client at startup (when this module is imported)
 load_embedding_model()
 
 # --- Embedding Generation --- #
+@track_openai_call(model=EMBEDDING_MODEL_NAME, endpoint="embeddings")
 async def generate_embedding(text_content: str) -> list[float] | None:
     """
     Generates a vector embedding for the given text content using OpenAI API.
@@ -54,14 +58,16 @@ async def generate_embedding(text_content: str) -> list[float] | None:
         return None
     
     try:
-        logger.info(f"Generating embedding for text: '{text_content[:50]}...' (length: {len(text_content)})")
+        logger.info("Generating embedding for text", extra={
+            "text_preview": text_content[:50] + "..." if len(text_content) > 50 else text_content,
+            "text_length": len(text_content)
+        })
         
-        # Добавляем проверку API ключа перед запросом
+        # Проверка API ключа перед запросом
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             logger.error("OPENAI_API_KEY is missing before embedding request")
             return None
-        logger.info(f"OPENAI_API_KEY exists before request, length: {len(api_key)} chars")
         
         response = await client.embeddings.create(
             model=EMBEDDING_MODEL_NAME,
@@ -70,20 +76,16 @@ async def generate_embedding(text_content: str) -> list[float] | None:
         embedding = response.data[0].embedding
         
         # Логируем успешный результат
-        logger.info(f"Successfully generated embedding with {len(embedding)} dimensions")
-        return embedding  # Already a list, no conversion needed
+        logger.info("Successfully generated embedding", extra={
+            "embedding_dimensions": len(embedding)
+        })
+        return embedding
     except Exception as e:
-        # Расширенное логирование ошибок
-        logger.error(f"Error during embedding generation: {e}", exc_info=True)
-        logger.error(f"Error type: {type(e).__name__}")
-        logger.error(f"Error details: {str(e)}")
-        
-        # Проверяем наличие API ключа в случае ошибки
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("OPENAI_API_KEY is missing during error handling")
-        else:
-            logger.error(f"OPENAI_API_KEY exists during error, length: {len(api_key)} chars")
+        # Структурированное логирование ошибок
+        logger.error("Error during embedding generation", extra={
+            "error_type": type(e).__name__,
+            "error_details": str(e)
+        }, exc_info=e)
         
         return None
 
@@ -104,7 +106,7 @@ async def find_relevant_faqs(db: Session, tenant_id: str, user_query: str, top_k
 
     query_embedding = await generate_embedding(user_query)
     if query_embedding is None:
-        logger.warning(f"Could not generate embedding for query: {user_query}")
+        logger.warning("Could not generate embedding for query", extra={"query": user_query})
         return []
 
     try:
@@ -118,10 +120,18 @@ async def find_relevant_faqs(db: Session, tenant_id: str, user_query: str, top_k
             .limit(top_k)
             .all()
         )
-        logger.info(f"Found {len(relevant_faqs)} relevant FAQs for tenant '{tenant_id}' and query '{user_query}'.")
+        logger.info("Found relevant FAQs", extra={
+            "count": len(relevant_faqs),
+            "tenant_id": tenant_id,
+            "query": user_query,
+            "top_k": top_k
+        })
         return relevant_faqs
     except Exception as e:
-        logger.error(f"Error finding relevant FAQs: {e}", exc_info=True)
+        logger.error("Error finding relevant FAQs", extra={
+            "tenant_id": tenant_id,
+            "query": user_query
+        }, exc_info=e)
         return []
 
 # --- RAG Core Logic --- #
@@ -132,7 +142,10 @@ async def get_rag_response(db: Session, tenant_id: str, user_query: str, system_
     2. Constructs a prompt with this context.
     3. (Conceptual) Sends the prompt to an LLM to generate a response.
     """
-    logger.info(f"RAG: Received query '{user_query}' for tenant '{tenant_id}'")
+    logger.info("RAG: Processing query", extra={
+        "tenant_id": tenant_id,
+        "query": user_query
+    })
     
     relevant_faqs = await find_relevant_faqs(db, tenant_id, user_query, top_k=3)
     
@@ -147,7 +160,10 @@ async def get_rag_response(db: Session, tenant_id: str, user_query: str, system_
     # Construct the prompt for the LLM
     prompt = f"{system_prompt}\n\nContext from knowledge base:\n{context_str}\n\nUser Question: {user_query}\n\nAnswer:"
     
-    logger.debug(f"--- Prompt for LLM ---\n{prompt}\n-----------------------")
+    logger.debug("Constructed prompt for LLM", extra={
+        "prompt_length": len(prompt),
+        "faq_count": len(relevant_faqs)
+    })
 
     # Step 3: (Conceptual) Send to LLM (e.g., OpenAI)
     # This part would involve calling an actual LLM API.
@@ -158,30 +174,8 @@ async def get_rag_response(db: Session, tenant_id: str, user_query: str, system_
     else:
         llm_answer = f"Based on the information I found regarding '{user_query}':\n\n{context_str}\n\n(This is a conceptual answer. An actual LLM would synthesize this information to directly answer your question.)"
     
-    logger.info(f"RAG: Generated conceptual LLM answer for tenant '{tenant_id}'.")
+    logger.info("RAG: Generated response", extra={
+        "tenant_id": tenant_id,
+        "response_length": len(llm_answer)
+    })
     return llm_answer
-
-# Example usage (for local testing if needed, ensure DB and models are accessible)
-if __name__ == "__main__":
-    # This block is for local testing. Requires a database session and async setup.
-    # Ensure your OPENAI_API_KEY is set if you plan to test.
-    
-    print(f"Embedding model name: {EMBEDDING_MODEL_NAME}")
-    print(f"Embedding dimension: {EMBEDDING_DIM}")
-
-    # To test embedding generation, you'd need to run this in an async context
-    # Example:
-    # import asyncio
-    # async def test_embedding():
-    #     sample_text = "What is pgvector?"
-    #     embedding = await generate_embedding(sample_text)
-    #     if embedding:
-    #         print(f"\nEmbedding for '{sample_text}':\n{embedding[:5]}... (first 5 dimensions)")
-    #         print(f"Length of embedding: {len(embedding)}")
-    #     else:
-    #         print(f"Could not generate embedding for '{sample_text}'.")
-    # asyncio.run(test_embedding())
-    
-    # To test find_relevant_faqs and get_rag_response, you'd need to set up
-    # a SQLAlchemy session and have some data in your database.
-    pass
