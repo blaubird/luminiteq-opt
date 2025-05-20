@@ -1,21 +1,24 @@
-"""initial
+"""Initial migration - creates tenants and messages tables
 
 Revision ID: 0001_initial
 Revises: 
-Create Date: 2025-05-10 00:00:00.000000
+Create Date: 2025-05-19 10:01:00.000000
 
 """
 from alembic import op
 import sqlalchemy as sa
 
-# уникальный ID миграции
+# revision identifiers, used by Alembic.
 revision = '0001_initial'
 down_revision = None
 branch_labels = None
 depends_on = None
 
 def upgrade():
-    # создаём таблицу tenants
+    """
+    Creates the initial database schema with tenants and messages tables.
+    """
+    # Create tenants table
     op.create_table(
         'tenants',
         sa.Column('id', sa.String(), primary_key=True),
@@ -23,7 +26,8 @@ def upgrade():
         sa.Column('wh_token', sa.Text(), nullable=False),
         sa.Column('system_prompt', sa.Text(), server_default='You are a helpful assistant.'),
     )
-    # создаём таблицу messages
+    
+    # Create messages table with foreign key to tenants
     op.create_table(
         'messages',
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
@@ -35,6 +39,8 @@ def upgrade():
     )
 
 def downgrade():
-    # откатываем в обратном порядке
+    """
+    Drops the messages and tenants tables in the correct order to maintain referential integrity.
+    """
     op.drop_table('messages')
     op.drop_table('tenants')
