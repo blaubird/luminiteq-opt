@@ -1,11 +1,11 @@
-# api/ai.py с структурированным логированием
+# api/ai.py с интеграцией структурированного логирования и мониторинга
 import os
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
-from monitoring_utils import track_openai_call
-from logging_utils import get_logger
 
 from models import FAQ  # Assuming FAQ model is in models.py
+from logging_utils import get_logger
+from monitoring_utils import track_openai_call
 
 # Инициализируем структурированный логгер
 logger = get_logger(__name__)
@@ -135,6 +135,7 @@ async def find_relevant_faqs(db: Session, tenant_id: str, user_query: str, top_k
         return []
 
 # --- RAG Core Logic --- #
+@track_openai_call(model="gpt-4o", endpoint="chat/completions")
 async def get_rag_response(db: Session, tenant_id: str, user_query: str, system_prompt: str) -> str:
     """
     Core RAG function:
