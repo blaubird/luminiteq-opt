@@ -21,6 +21,7 @@ from tasks import celery_app, process_ai_reply  # Import Celery app and tasks
 # Import logging and monitoring utilities
 from logging_utils import setup_logging, get_logger
 from monitoring_utils import setup_monitoring, track_openai_call
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # --- Environment Variable Sanitization (OpenAI client is now initialized after this) ---
 # This block can remain, or you can rely solely on .env for local and Railway env vars for prod
@@ -39,14 +40,25 @@ ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 app = FastAPI(
     title="Luminiteq WhatsApp Integration API",
     description="Handles WhatsApp webhooks, processes messages using AI, provides admin functionalities, and RAG capabilities.",
-    version="1.3.0" # Incremented version for logging and monitoring integration
+    version="1.3.0", # Incremented version for logging and monitoring integration
+    docs_url="/docs",
+    redoc_url=None,
+    openapi_url="/openapi.json"
 )
+
+# Root endpoint
+@app.get("/", include_in_schema=False)
+def index():
+    return {"status": "ok", "docs": "/docs"}
 
 # Setup structured logging
 logger = setup_logging(app)("main")
 
 # Setup monitoring
 setup_monitoring(app)
+
+# Setup Prometheus metrics
+Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 # Include the admin and RAG routers
 app.include_router(admin_router.router)
