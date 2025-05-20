@@ -1,5 +1,6 @@
 import time
 import functools
+import os
 from prometheus_client import Counter, Histogram, start_http_server
 
 # Метрики Prometheus
@@ -19,10 +20,21 @@ OPENAI_LATENCY = Histogram(
 def setup_monitoring(app):
     """
     Настраивает мониторинг для FastAPI приложения.
-    Запускает HTTP-сервер Prometheus на порту 8000.
+    Запускает HTTP-сервер Prometheus на порту, указанном в переменной окружения
+    PROMETHEUS_PORT (по умолчанию 9090).
     """
-    # Запускаем HTTP-сервер для метрик Prometheus на порту 8000
-    start_http_server(8000)
+    # Получаем порт из переменной окружения или используем 9090 по умолчанию
+    prometheus_port = int(os.getenv("PROMETHEUS_PORT", 9090))
+    
+    try:
+        # Запускаем HTTP-сервер для метрик Prometheus
+        start_http_server(prometheus_port)
+    except OSError as e:
+        # Если порт занят, пробуем использовать другой порт
+        if e.errno == 98:  # Address already in use
+            fallback_port = prometheus_port + 1
+            print(f"Port {prometheus_port} is already in use. Trying port {fallback_port}")
+            start_http_server(fallback_port)
     
     # Добавляем middleware для отслеживания запросов FastAPI
     @app.middleware("http")
