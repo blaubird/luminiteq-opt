@@ -14,6 +14,10 @@ celery_app = Celery('luminiteq_tasks')
 celery_app.conf.broker_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 celery_app.conf.result_backend = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 
+# Проверка и логирование конфигурации Redis
+redis_host = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+logger.info(f"Celery configured with broker: {redis_host}")
+
 # Настройка ограничений и повторных попыток
 celery_app.conf.task_acks_late = True  # Подтверждение задачи только после успешного выполнения
 celery_app.conf.task_reject_on_worker_lost = True  # Перезапуск задачи при потере воркера
@@ -22,6 +26,9 @@ celery_app.conf.task_soft_time_limit = 240  # Мягкое ограничени�
 celery_app.conf.worker_concurrency = 4  # Количество параллельных воркеров
 celery_app.conf.task_default_retry_delay = 60  # Задержка перед повторной попыткой (60 секунд)
 celery_app.conf.task_max_retries = 3  # Максимальное количество повторных попыток
+celery_app.conf.broker_connection_retry = True  # Автоматические повторные попытки подключения к брокеру
+celery_app.conf.broker_connection_retry_on_startup = True  # Повторные попытки при запуске
+celery_app.conf.broker_connection_max_retries = 10  # Максимальное количество повторных попыток подключения
 
 @celery_app.task(bind=True, name='tasks.process_ai_reply')
 def process_ai_reply(self, tenant_id, tenant_phone_id, tenant_wh_token, tenant_system_prompt, 
