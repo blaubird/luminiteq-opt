@@ -9,14 +9,14 @@ from models import Message, Tenant
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
-# Инициализация Celery
+# Инициализация Celery с новым URI для Redis
+redis_uri = os.getenv('CELERY_BROKER_URL', 'redis://default:QdBMAFxvwbuRSYuswUUZotWefQwCLHZS@redis.railway.internal:6379')
 celery_app = Celery('luminiteq_tasks')
-celery_app.conf.broker_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-celery_app.conf.result_backend = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+celery_app.conf.broker_url = redis_uri
+celery_app.conf.result_backend = redis_uri
 
 # Проверка и логирование конфигурации Redis
-redis_host = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-logger.info(f"Celery configured with broker: {redis_host}")
+logger.info(f"Celery configured with broker: {redis_uri}")
 
 # Настройка ограничений и повторных попыток
 celery_app.conf.task_acks_late = True  # Подтверждение задачи только после успешного выполнения
