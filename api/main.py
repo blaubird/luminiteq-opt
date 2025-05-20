@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 load_dotenv() # Load environment variables from .env file at the very beginning
 
 import os
-import logging
 import time
 from fastapi import FastAPI, Depends, Request, HTTPException, Query, Response
 from alembic.config import Config
@@ -63,7 +62,7 @@ def startup_event():
         command.upgrade(alembic_cfg, "head")
         logger.info("Alembic migrations completed successfully.")
     except Exception as e:
-        logger.error(f"Error during Alembic migrations", exc_info=e)
+        logger.error("Error during Alembic migrations", exc_info=e)
     
     # Explicitly load the embedding model from ai.py if not already loaded
     # This ensures it's ready when the app starts.
@@ -74,7 +73,10 @@ def startup_event():
     except ImportError:
         logger.error("Could not import load_embedding_model from ai.py")
     except Exception as e:
-        logger.error(f"Error explicitly loading embedding model during startup", exc_info=e)
+        logger.error("Error explicitly loading embedding model during startup", exc_info=e)
+
+    # Record startup time for metrics
+    app.state.start_time = time.time()
 
 
 # --- Health Check Endpoint ---
@@ -98,7 +100,10 @@ async def verify_webhook(
         logger.info("Webhook verification successful.")
         return Response(content=hub_challenge, media_type="text/plain")
     else:
-        logger.warning("Webhook verification failed. Mode or token mismatch.")
+        logger.warning("Webhook verification failed", extra={
+            "mode": hub_mode,
+            "token_match": False
+        })
         raise HTTPException(status_code=403, detail="Forbidden: Verification token mismatch.")
 
 # --- Main Webhook Endpoint for Receiving Messages ---
@@ -181,7 +186,7 @@ async def webhook_handler(
                 ] + [{"role": m.role, "content": m.text} for m in history_messages]
 
                 # Заменяем BackgroundTasks на Celery
-                process_ai_reply.delay(
+                task = process_ai_reply.delay(
                     tenant_id=tenant.id,
                     tenant_phone_id=tenant.phone_id,
                     tenant_wh_token=tenant.wh_token,
@@ -193,7 +198,8 @@ async def webhook_handler(
                 logger.info("Added AI reply task to Celery queue", extra={
                     "wa_msg_id": whatsapp_msg_id,
                     "tenant_id": tenant.id,
-                    "message_id": db_message.id
+                    "message_id": db_message.id,
+                    "task_id": task.id
                 })
 
     return {"status": "received", "message": "Webhook processed successfully."}
