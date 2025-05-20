@@ -2,180 +2,128 @@ import logging
 import json
 import time
 import traceback
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Awaitable
+
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from contextvars import ContextVar
 
-# Контекстная переменная для хранения request_id и других метаданных
+# -----------------------------------------------------------------------------
+# Context variable: хранит метаданные текущего запроса (безопасно для async)
+# -----------------------------------------------------------------------------
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
 
+
+# -----------------------------------------------------------------------------
+# Structured JSON logger (stdout‑friendly для Railway / Grafana Loki)
+# -----------------------------------------------------------------------------
 class StructuredLogger:
-    """
-    Класс для структурированного логирования в формате JSON
-    """
     def __init__(self, name: str):
         self.logger = logging.getLogger(name)
-    
+
     def _log(self, level: int, msg: str, extra: Optional[Dict[str, Any]] = None, exc_info=None):
-        """Базовый метод логирования с добавлением контекста"""
-        context = request_context.get()
-        log_data = {
-            "message": msg,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+        ctx = request_context.get()
+        payload: Dict[str, Any] = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "level": logging.getLevelName(level),
+            "message": msg,
         }
-        
-        # Добавляем контекст запроса, если есть
-        if context:
-            log_data.update(context)
-        
-        # Добавляем дополнительные поля
+        if ctx:
+            payload.update(ctx)
         if extra:
-            log_data.update(extra)
-        
-        # Добавляем информацию об исключении, если есть
+            payload.update(extra)
         if exc_info:
-            if isinstance(exc_info, Exception):
-                log_data["exception"] = {
-                    "type": exc_info.__class__.__name__,
-                    "message": str(exc_info),
-                    "traceback": traceback.format_exc()
-                }
-            else:
-                log_data["exc_info"] = True
-        
-        # Логируем как JSON
-        self.logger.log(level, json.dumps(log_data), exc_info=exc_info if exc_info is True else None)
-    
-    def debug(self, msg: str, extra: Optional[Dict[str, Any]] = None, exc_info=None):
-        self._log(logging.DEBUG, msg, extra, exc_info)
-    
-    def info(self, msg: str, extra: Optional[Dict[str, Any]] = None, exc_info=None):
-        self._log(logging.INFO, msg, extra, exc_info)
-    
-    def warning(self, msg: str, extra: Optional[Dict[str, Any]] = None, exc_info=None):
-        self._log(logging.WARNING, msg, extra, exc_info)
-    
-    def error(self, msg: str, extra: Optional[Dict[str, Any]] = None, exc_info=None):
-        self._log(logging.ERROR, msg, extra, exc_info)
-    
-    def critical(self, msg: str, extra: Optional[Dict[str, Any]] = None, exc_info=None):
-        self._log(logging.CRITICAL, msg, extra, exc_info)
+            payload["exception"] = {
+                "type": exc_info.__class__.__name__,
+                "message": str(exc_info),
+                "traceback": traceback.format_exc(),
+            }
+        self.logger.log(level, json.dumps(payload))
+
+    # convenience wrappers
+    def debug(self, msg: str, **kw):
+        self._log(logging.DEBUG, msg, **kw)
+
+    def info(self, msg: str, **kw):
+        self._log(logging.INFO, msg, **kw)
+
+    def warning(self, msg: str, **kw):
+        self._log(logging.WARNING, msg, **kw)
+
+    def error(self, msg: str, **kw):
+        self._log(logging.ERROR, msg, **kw)
+
+    def critical(self, msg: str, **kw):
+        self._log(logging.CRITICAL, msg, **kw)
+
 
 def get_logger(name: str) -> StructuredLogger:
-    """Фабричный метод для получения структурированного логгера"""
     return StructuredLogger(name)
 
+
+# -----------------------------------------------------------------------------
+# Middleware: добавляет контекст запроса и логирует время ответа
+# Исправлено двойное reset()  → RuntimeError more
+# -----------------------------------------------------------------------------
 class RequestContextMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware для добавления контекста запроса в логи
-    """
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # Генерируем уникальный ID запроса
-        request_id = f"{time.time()}-{id(request)}"
-        
-        # Создаем контекст запроса
-        context = {
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:  # type: ignore[override]
+        request_id = f"{int(time.time() * 1000)}-{id(request)}"
+        ctx = {
             "request_id": request_id,
             "method": request.method,
             "path": request.url.path,
             "client_ip": request.client.host if request.client else None,
         }
-        
-        # Устанавливаем контекст
-        token = request_context.set(context)
-        
+        token = request_context.set(ctx)
+        start = time.perf_counter()
         try:
-            # Замеряем время выполнения запроса
-            start_time = time.time()
             response = await call_next(request)
-            process_time = time.time() - start_time
-            
-            # Добавляем информацию о времени выполнения и статусе ответа
-            context = request_context.get()
-            context.update({
-                "status_code": response.status_code,
-                "process_time_ms": round(process_time * 1000, 2)
-            })
-            request_context.reset(token)
-            
-            # Добавляем заголовок с ID запроса
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            ctx["status_code"] = response.status_code
+            ctx["process_time_ms"] = duration_ms
             response.headers["X-Request-ID"] = request_id
             return response
-        except Exception as e:
-            # Логируем исключение
+        except Exception as exc:
             logger = get_logger("middleware")
-            logger.error(
-                f"Unhandled exception in request: {str(e)}",
-                extra={"exception_type": e.__class__.__name__},
-                exc_info=e
-            )
-            # Пробрасываем исключение дальше для обработки глобальным обработчиком
+            logger.error("Unhandled exception in request", exc_info=exc)
             raise
         finally:
-            # Сбрасываем контекст
-            request_context.reset(token)
+            # Сбрасываем контекст один раз; защищаемся от повторного вызова.
+            try:
+                request_context.reset(token)
+            except RuntimeError:
+                pass
 
+
+# -----------------------------------------------------------------------------
+# Global exception handler → JSON + лог
+# -----------------------------------------------------------------------------
 class GlobalExceptionHandler:
-    """
-    Глобальный обработчик исключений для FastAPI
-    """
     def __init__(self, app: FastAPI):
-        @app.exception_handler(Exception)
-        async def handle_exception(request: Request, exc: Exception):
-            # Получаем логгер
+        @app.exception_handler(Exception)  # noqa: ANN401
+        async def handle_exception(request: Request, exc: Exception):  # type: ignore[override]
             logger = get_logger("exception_handler")
-            
-            # Логируем исключение
-            logger.error(
-                f"Unhandled exception: {str(exc)}",
-                extra={
-                    "path": request.url.path,
-                    "method": request.method,
-                    "exception_type": exc.__class__.__name__
-                },
-                exc_info=exc
-            )
-            
-            # Возвращаем ответ с ошибкой
+            logger.error("Unhandled exception", exc_info=exc)
             from fastapi.responses import JSONResponse
             from fastapi import status
-            
-            # Определяем статус код в зависимости от типа исключения
-            if hasattr(exc, "status_code"):
-                status_code = exc.status_code
-            else:
-                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            
-            # Формируем ответ
+
+            status_code = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
             return JSONResponse(
                 status_code=status_code,
                 content={
                     "error": exc.__class__.__name__,
                     "detail": str(exc),
-                    "request_id": request_context.get().get("request_id", "unknown")
-                }
+                    "request_id": request_context.get().get("request_id", "unknown"),
+                },
             )
 
+
+# -----------------------------------------------------------------------------
+# Helper called from main.py
+# -----------------------------------------------------------------------------
+
 def setup_logging(app: FastAPI):
-    """
-    Настройка логирования и обработки исключений
-    """
-    # Добавляем middleware для контекста запроса
     app.add_middleware(RequestContextMiddleware)
-    
-    # Добавляем глобальный обработчик исключений
     GlobalExceptionHandler(app)
-    
-    # Настраиваем базовое логирование
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(message)s',  # Используем простой формат, так как форматирование делает StructuredLogger
-        handlers=[
-            logging.StreamHandler(),  # Вывод в консоль
-        ]
-    )
-    
-    # Возвращаем фабричную функцию для создания логгеров
+    logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[logging.StreamHandler()])
     return get_logger
