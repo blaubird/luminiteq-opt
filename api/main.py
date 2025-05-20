@@ -3,8 +3,8 @@ load_dotenv() # Load environment variables from .env file at the very beginning
 
 import os
 import logging
+import time
 from fastapi import FastAPI, Depends, Request, HTTPException, Query, Response
-from logging.config import fileConfig
 from alembic.config import Config
 from alembic import command
 import httpx
@@ -18,6 +18,10 @@ from models import Message, Tenant
 from routers import admin as admin_router
 from routers import rag as rag_router # Import the RAG router
 from tasks import celery_app, process_ai_reply  # Import Celery app and tasks
+
+# Import logging and monitoring utilities
+from logging_utils import setup_logging, get_logger
+from monitoring_utils import setup_monitoring, track_openai_call
 
 # --- Environment Variable Sanitization (OpenAI client is now initialized after this) ---
 # This block can remain, or you can rely solely on .env for local and Railway env vars for prod
@@ -36,16 +40,18 @@ ai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 app = FastAPI(
     title="Luminiteq WhatsApp Integration API",
     description="Handles WhatsApp webhooks, processes messages using AI, provides admin functionalities, and RAG capabilities.",
-    version="1.2.0" # Incremented version for Celery integration
+    version="1.3.0" # Incremented version for logging and monitoring integration
 )
+
+# Setup structured logging
+logger = setup_logging(app)("main")
+
+# Setup monitoring
+setup_monitoring(app)
 
 # Include the admin and RAG routers
 app.include_router(admin_router.router)
 app.include_router(rag_router.router) # Add the RAG router
-
-# --- Logging Configuration ---
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
-logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 def startup_event():
@@ -57,7 +63,7 @@ def startup_event():
         command.upgrade(alembic_cfg, "head")
         logger.info("Alembic migrations completed successfully.")
     except Exception as e:
-        logger.error(f"Error during Alembic migrations: {e}", exc_info=True)
+        logger.error(f"Error during Alembic migrations", exc_info=e)
     
     # Explicitly load the embedding model from ai.py if not already loaded
     # This ensures it's ready when the app starts.
@@ -68,7 +74,7 @@ def startup_event():
     except ImportError:
         logger.error("Could not import load_embedding_model from ai.py")
     except Exception as e:
-        logger.error(f"Error explicitly loading embedding model during startup: {e}", exc_info=True)
+        logger.error(f"Error explicitly loading embedding model during startup", exc_info=e)
 
 
 # --- Health Check Endpoint ---
@@ -104,10 +110,10 @@ async def webhook_handler(
     try:
         payload = await request.json()
     except Exception as e:
-        logger.error(f"Error parsing webhook payload: {e}", exc_info=True)
+        logger.error("Error parsing webhook payload", exc_info=e)
         raise HTTPException(status_code=400, detail="Invalid payload format.")
 
-    logger.info(f"Received webhook payload: {payload}")
+    logger.info("Received webhook payload", extra={"payload": payload})
 
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
@@ -121,7 +127,7 @@ async def webhook_handler(
 
             tenant = tenant_by_phone_id(phone_id, db)
             if not tenant:
-                logger.warning(f"Tenant not found for phone_id: {phone_id}")
+                logger.warning("Tenant not found for phone_id", extra={"phone_id": phone_id})
                 continue
 
             for msg_data in value.get("messages", []):
@@ -130,12 +136,12 @@ async def webhook_handler(
                 whatsapp_msg_id = msg_data.get("id")
 
                 if not all([sender_phone, text_content, whatsapp_msg_id]):
-                    logger.warning(f"Incomplete message data received: {msg_data}")
+                    logger.warning("Incomplete message data received", extra={"msg_data": msg_data})
                     continue
 
                 existing_message = db.query(Message).filter_by(wa_msg_id=whatsapp_msg_id).first()
                 if existing_message:
-                    logger.info(f"Skipping duplicate WhatsApp message ID: {whatsapp_msg_id}")
+                    logger.info("Skipping duplicate WhatsApp message ID", extra={"wa_msg_id": whatsapp_msg_id})
                     continue
 
                 try:
@@ -148,14 +154,18 @@ async def webhook_handler(
                     db.add(db_message)
                     db.commit()
                     db.refresh(db_message)
-                    logger.info(f"Saved incoming message ID {db_message.id} (WA ID: {whatsapp_msg_id})")
+                    logger.info("Saved incoming message", extra={
+                        "message_id": db_message.id,
+                        "wa_msg_id": whatsapp_msg_id,
+                        "tenant_id": tenant.id
+                    })
                 except IntegrityError as e:
                     db.rollback()
-                    logger.error(f"IntegrityError saving message (WA ID: {whatsapp_msg_id}): {e}", exc_info=True)
+                    logger.error("IntegrityError saving message", extra={"wa_msg_id": whatsapp_msg_id}, exc_info=e)
                     continue
                 except Exception as e:
                     db.rollback()
-                    logger.error(f"Error saving message (WA ID: {whatsapp_msg_id}): {e}", exc_info=True)
+                    logger.error("Error saving message", extra={"wa_msg_id": whatsapp_msg_id}, exc_info=e)
                     continue
 
                 chat_history_query = (
@@ -180,6 +190,10 @@ async def webhook_handler(
                     sender_phone=sender_phone,
                     message_id=db_message.id
                 )
-                logger.info(f"Added AI reply task to Celery queue for WA message ID: {whatsapp_msg_id}")
+                logger.info("Added AI reply task to Celery queue", extra={
+                    "wa_msg_id": whatsapp_msg_id,
+                    "tenant_id": tenant.id,
+                    "message_id": db_message.id
+                })
 
     return {"status": "received", "message": "Webhook processed successfully."}
