@@ -27,12 +27,12 @@ def fix_alembic_env():
         shutil.copy2(env_py_path, backup_path)
         logger.info(f"Создана резервная копия env.py: {backup_path}")
         
-        # Новое содержимое файла env.py с прямым использованием DATABASE_URL
+        # Новое содержимое файла env.py с прямым использованием create_engine
         new_content = """
 from logging.config import fileConfig
 import os
 
-from sqlalchemy import engine_from_config
+from sqlalchemy import create_engine
 from sqlalchemy import pool
 from sqlalchemy import MetaData
 
@@ -62,9 +62,6 @@ database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise ValueError("DATABASE_URL environment variable is not set")
 
-# Устанавливаем URL в конфигурацию
-config.set_main_option("sqlalchemy.url", database_url)
-
 
 def run_migrations_offline() -> None:
     \"\"\"Run migrations in 'offline' mode.
@@ -78,9 +75,8 @@ def run_migrations_offline() -> None:
     script output.
 
     \"\"\"
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -97,11 +93,8 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     \"\"\"
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    # Используем create_engine напрямую с database_url
+    connectable = create_engine(database_url)
 
     with connectable.connect() as connection:
         context.configure(
@@ -340,14 +333,13 @@ if not database_url:
     print("Переменная окружения DATABASE_URL не установлена")
     sys.exit(1)
 
+print(f"DATABASE_URL установлен: {database_url[:10]}...")
+
 # Получаем путь к alembic.ini
 alembic_ini_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alembic.ini")
 
 # Создаем конфигурацию Alembic
 alembic_cfg = Config(alembic_ini_path)
-
-# Устанавливаем URL в конфигурацию
-alembic_cfg.set_main_option("sqlalchemy.url", database_url)
 
 # Применяем миграции
 print("Применяем миграции Alembic...")
@@ -400,28 +392,32 @@ wh_token = os.getenv("WH_TOKEN", "test_token")
 tenant_id = "test_tenant"
 system_prompt = "You are a helpful assistant."
 
-# Подключаемся к базе данных
-conn = psycopg2.connect(database_url)
-cursor = conn.cursor()
+try:
+    # Подключаемся к базе данных
+    conn = psycopg2.connect(database_url)
+    cursor = conn.cursor()
 
-# Проверяем, существует ли тестовый арендатор
-cursor.execute("SELECT id FROM tenants WHERE phone_id = %s", (phone_id,))
-tenant = cursor.fetchone()
+    # Проверяем, существует ли тестовый арендатор
+    cursor.execute("SELECT id FROM tenants WHERE phone_id = %s", (phone_id,))
+    tenant = cursor.fetchone()
 
-if tenant:
-    print(f"Тестовый арендатор с phone_id={phone_id} уже существует")
-else:
-    # Создаем тестового арендатора
-    cursor.execute(
-        "INSERT INTO tenants (id, phone_id, wh_token, system_prompt) VALUES (%s, %s, %s, %s)",
-        (tenant_id, phone_id, wh_token, system_prompt)
-    )
-    conn.commit()
-    print(f"Создан тестовый арендатор с phone_id={phone_id}")
+    if tenant:
+        print(f"Тестовый арендатор с phone_id={phone_id} уже существует")
+    else:
+        # Создаем тестового арендатора
+        cursor.execute(
+            "INSERT INTO tenants (id, phone_id, wh_token, system_prompt) VALUES (%s, %s, %s, %s)",
+            (tenant_id, phone_id, wh_token, system_prompt)
+        )
+        conn.commit()
+        print(f"Создан тестовый арендатор с phone_id={phone_id}")
 
-# Закрываем соединение
-cursor.close()
-conn.close()
+    # Закрываем соединение
+    cursor.close()
+    conn.close()
+except Exception as e:
+    print(f"Ошибка при создании тестового арендатора: {str(e)}")
+    sys.exit(1)
 """
         
         # Записываем скрипт во временный файл
@@ -465,10 +461,10 @@ def fix_webhook_handler():
         # Находим и исправляем обработчик webhook
         if "@app.post('/webhook')" in content:
             # Заменяем асинхронный обработчик на синхронный с более простой логикой
-            webhook_handler = """
+            new_handler = """
 @app.post('/webhook')
 def webhook_handler(request: Request):
-    """Обработчик webhook от WhatsApp."""
+    # Обработчик webhook от WhatsApp
     try:
         # Логируем получение webhook
         logger.info("Received webhook request")
@@ -483,7 +479,7 @@ def webhook_handler(request: Request):
             # Заменяем обработчик в файле
             import re
             pattern = r"@app\.post\('/webhook'\).*?def webhook_handler.*?\).*?(\n\s*return.*?\n)"
-            new_content = re.sub(pattern, webhook_handler, content, flags=re.DOTALL)
+            new_content = re.sub(pattern, new_handler, content, flags=re.DOTALL)
             
             # Записываем новое содержимое
             with open(main_py_path, "w") as f:
